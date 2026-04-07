@@ -4,7 +4,17 @@ from strands.models.model import Model
 from typing_extensions import Union
 
 from .multimodal_output_evaluator import MultimodalOutputEvaluator
-from .prompt_templates.multimodal import OVERALL_QUALITY_RUBRIC_V0, OVERALL_QUALITY_RUBRIC_V0_REF
+from .prompt_templates.multimodal import OVERALL_QUALITY_RUBRIC_V0
+
+_OVERALL_QUALITY_REFERENCE_SUFFIX = """
+
+REFERENCE COMPARISON:
+- Compare the response against the Oracle reference answer above.
+- The reference should be treated as the gold standard.
+- Reward responses that cover the same key points as the reference.
+- Penalize responses that miss important information present in the reference.
+- Penalize responses that contain claims contradicting the reference.
+- The response does NOT need to match the reference word-for-word — only the factual content matters."""
 
 
 class MultimodalOverallQualityEvaluator(MultimodalOutputEvaluator):
@@ -14,7 +24,7 @@ class MultimodalOverallQualityEvaluator(MultimodalOutputEvaluator):
     adherence, completeness, and coherence/helpfulness. Ships with an image-to-text
     rubric by default; pass a custom rubric for other media types.
 
-    Automatically uses the reference-based rubric when ``expected_output`` is provided.
+    Automatically appends a reference comparison suffix when ``expected_output`` is provided.
     """
 
     def __init__(
@@ -27,9 +37,9 @@ class MultimodalOverallQualityEvaluator(MultimodalOutputEvaluator):
     ):
         super().__init__(
             rubric=rubric if rubric is not None else OVERALL_QUALITY_RUBRIC_V0,
-            ref_rubric=None if rubric is not None else OVERALL_QUALITY_RUBRIC_V0_REF,
             model=model,
             include_media=include_media,
             include_inputs=include_inputs,
             system_prompt=system_prompt,
+            reference_suffix=_OVERALL_QUALITY_REFERENCE_SUFFIX,
         )

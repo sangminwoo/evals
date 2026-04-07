@@ -4,7 +4,7 @@ from strands.models.model import Model
 from typing_extensions import Union
 
 from .multimodal_output_evaluator import MultimodalOutputEvaluator
-from .prompt_templates.multimodal import INSTRUCTION_FOLLOWING_RUBRIC_V0, INSTRUCTION_FOLLOWING_RUBRIC_V0_REF
+from .prompt_templates.multimodal import INSTRUCTION_FOLLOWING_RUBRIC_V0
 
 
 class MultimodalInstructionFollowingEvaluator(MultimodalOutputEvaluator):
@@ -13,7 +13,7 @@ class MultimodalInstructionFollowingEvaluator(MultimodalOutputEvaluator):
     Assesses whether the response addresses the query's requirements and constraints.
     Ships with an image-to-text rubric by default; pass a custom rubric for other media types.
 
-    Automatically uses the reference-based rubric when ``expected_output`` is provided.
+    Automatically appends a reference comparison suffix when ``expected_output`` is provided.
     """
 
     def __init__(
@@ -26,7 +26,6 @@ class MultimodalInstructionFollowingEvaluator(MultimodalOutputEvaluator):
     ):
         super().__init__(
             rubric=rubric if rubric is not None else INSTRUCTION_FOLLOWING_RUBRIC_V0,
-            ref_rubric=None if rubric is not None else INSTRUCTION_FOLLOWING_RUBRIC_V0_REF,
             model=model,
             include_media=include_media,
             include_inputs=include_inputs,

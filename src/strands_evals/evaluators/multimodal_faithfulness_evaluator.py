@@ -4,7 +4,7 @@ from strands.models.model import Model
 from typing_extensions import Union
 
 from .multimodal_output_evaluator import MultimodalOutputEvaluator
-from .prompt_templates.multimodal import FAITHFULNESS_RUBRIC_V0, FAITHFULNESS_RUBRIC_V0_REF
+from .prompt_templates.multimodal import FAITHFULNESS_RUBRIC_V0
 
 
 class MultimodalFaithfulnessEvaluator(MultimodalOutputEvaluator):
@@ -13,7 +13,7 @@ class MultimodalFaithfulnessEvaluator(MultimodalOutputEvaluator):
     Assesses whether the response is grounded in the media content without hallucinations.
     Ships with an image-to-text rubric by default; pass a custom rubric for other media types.
 
-    Automatically uses the reference-based rubric when ``expected_output`` is provided.
+    Automatically appends a reference comparison suffix when ``expected_output`` is provided.
     """
 
     def __init__(
@@ -26,7 +26,6 @@ class MultimodalFaithfulnessEvaluator(MultimodalOutputEvaluator):
     ):
         super().__init__(
             rubric=rubric if rubric is not None else FAITHFULNESS_RUBRIC_V0,
-            ref_rubric=None if rubric is not None else FAITHFULNESS_RUBRIC_V0_REF,
             model=model,
             include_media=include_media,
             include_inputs=include_inputs,

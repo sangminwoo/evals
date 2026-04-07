@@ -25,14 +25,23 @@ class MultimodalOutputEvaluator(OutputEvaluator[MultimodalInput, str]):
     LLM-as-a-Judge (text-only) modes, as well as reference-based and reference-free
     evaluation.
 
+    When ``expected_output`` is provided in the evaluation case, a reference comparison
+    suffix is automatically appended to the rubric to enable reference-based evaluation.
+
     Attributes:
         rubric: Evaluation criteria (e.g., correctness, faithfulness rubric)
         model: Model instance or model ID string for the MLLM judge
         include_media: Whether to include the media in the judge prompt (MLLM vs LLM mode)
         include_inputs: Whether to include the original instruction in evaluation
         system_prompt: System prompt for the MLLM judge
-        ref_rubric: Reference-based rubric variant, auto-selected when expected_output is provided
+        reference_suffix: Text appended to rubric when expected_output is provided
     """
+
+    DEFAULT_REFERENCE_SUFFIX = """
+
+REFERENCE COMPARISON:
+- Compare the response against the Oracle reference answer above.
+- The reference is the gold standard. Use discrepancies as evidence for your judgment."""
 
     def __init__(
         self,
@@ -41,7 +50,7 @@ class MultimodalOutputEvaluator(OutputEvaluator[MultimodalInput, str]):
         include_media: bool = True,
         include_inputs: bool = True,
         system_prompt: Union[str, None] = None,
-        ref_rubric: Union[str, None] = None,
+        reference_suffix: Union[str, None] = None,
     ):
         super().__init__(
             rubric=rubric,
@@ -50,19 +59,22 @@ class MultimodalOutputEvaluator(OutputEvaluator[MultimodalInput, str]):
             include_inputs=include_inputs,
         )
         self.include_media = include_media
-        self.ref_rubric = ref_rubric
+        self.reference_suffix = reference_suffix if reference_suffix is not None else self.DEFAULT_REFERENCE_SUFFIX
 
     def _select_rubric(self, evaluation_case: EvaluationData[MultimodalInput, str]) -> str:
-        """Select the appropriate rubric based on whether a reference output is available."""
-        if self.ref_rubric and evaluation_case.expected_output is not None:
-            return self.ref_rubric
+        """Select the appropriate rubric based on whether a reference output is available.
+
+        When expected_output is present, appends the reference comparison suffix to the rubric.
+        """
+        if evaluation_case.expected_output is not None:
+            return self.rubric + self.reference_suffix
         return self.rubric
 
     def evaluate(self, evaluation_case: EvaluationData[MultimodalInput, str]) -> List[EvaluationOutput]:
         """Evaluate a multimodal test case.
 
-        Automatically selects the reference-based rubric when ``expected_output`` is
-        provided and a ``ref_rubric`` was configured, otherwise uses the default rubric.
+        Automatically appends reference comparison suffix to rubric when
+        ``expected_output`` is provided, otherwise uses the rubric as-is.
 
         Args:
             evaluation_case: Test case with multimodal input and expected/actual outputs.
@@ -94,8 +106,8 @@ class MultimodalOutputEvaluator(OutputEvaluator[MultimodalInput, str]):
     async def evaluate_async(self, evaluation_case: EvaluationData[MultimodalInput, str]) -> List[EvaluationOutput]:
         """Evaluate a multimodal test case asynchronously.
 
-        Automatically selects the reference-based rubric when ``expected_output`` is
-        provided and a ``ref_rubric`` was configured, otherwise uses the default rubric.
+        Automatically appends reference comparison suffix to rubric when
+        ``expected_output`` is provided, otherwise uses the rubric as-is.
 
         Args:
             evaluation_case: Test case with multimodal input and expected/actual outputs.
