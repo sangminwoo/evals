@@ -7,7 +7,7 @@ import re
 import urllib.request
 from io import BytesIO
 from pathlib import Path
-from typing import Any, List, Literal, Optional, Union
+from typing import Any, List, Literal, Optional, Union, cast
 
 from pydantic import BaseModel, field_validator, model_serializer
 from typing_extensions import NotRequired, TypedDict
@@ -52,18 +52,19 @@ def _looks_like_file_path(value: str) -> bool:
     return False
 
 
-def _detect_format(source: Any) -> Optional[str]:
+def _detect_format(source: Any) -> Optional[Literal["jpeg", "png", "gif", "webp"]]:
     """Detect image format from the source value."""
     if not isinstance(source, str):
         return None
     if _DATA_URL_PATTERN.match(source):
         media_part = source.split(";")[0]
         fmt = media_part.split("/")[-1].lower()
-        return fmt if fmt in _IMAGE_FORMATS else None
+        return cast(Literal["jpeg", "png", "gif", "webp"], fmt) if fmt in _IMAGE_FORMATS else None
     is_local = _looks_like_file_path(source) and not _S3_URI_PATTERN.match(source)
     is_local = is_local and not _HTTP_URL_PATTERN.match(source)
     if is_local:
-        return _IMAGE_FORMAT_FROM_EXT.get(Path(source).suffix.lower())
+        result = _IMAGE_FORMAT_FROM_EXT.get(Path(source).suffix.lower())
+        return cast(Optional[Literal["jpeg", "png", "gif", "webp"]], result)
     return None
 
 

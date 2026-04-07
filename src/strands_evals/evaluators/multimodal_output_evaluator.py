@@ -6,6 +6,7 @@ from typing import List, Union, cast
 
 from strands import Agent
 from strands.models.model import Model
+from strands.types.content import ContentBlock
 
 from ..types.evaluation import EvaluationData, EvaluationOutput
 from ..types.multimodal import MultimodalInput
@@ -86,7 +87,8 @@ class MultimodalOutputEvaluator(OutputEvaluator[MultimodalInput, str]):
         )
 
         evaluator_agent = Agent(model=self.model, system_prompt=self.system_prompt, callback_handler=None)
-        result = evaluator_agent(evaluation_prompt, structured_output_model=EvaluationOutput)
+        prompt: Union[str, List[ContentBlock]] = cast(Union[str, List[ContentBlock]], evaluation_prompt)
+        result = evaluator_agent(prompt, structured_output_model=EvaluationOutput)
         return [cast(EvaluationOutput, result.structured_output)]
 
     async def evaluate_async(self, evaluation_case: EvaluationData[MultimodalInput, str]) -> List[EvaluationOutput]:
@@ -118,5 +120,6 @@ class MultimodalOutputEvaluator(OutputEvaluator[MultimodalInput, str]):
         )
 
         evaluator_agent = Agent(model=self.model, system_prompt=self.system_prompt, callback_handler=None)
-        result = await evaluator_agent.invoke_async(evaluation_prompt, structured_output_model=EvaluationOutput)
+        prompt: Union[str, List[ContentBlock]] = cast(Union[str, List[ContentBlock]], evaluation_prompt)
+        result = await evaluator_agent.invoke_async(prompt, structured_output_model=EvaluationOutput)
         return [cast(EvaluationOutput, result.structured_output)]

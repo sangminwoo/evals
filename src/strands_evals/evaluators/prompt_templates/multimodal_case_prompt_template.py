@@ -103,8 +103,10 @@ def compose_multimodal_test_prompt(
         # Normalize to list
         if isinstance(media, list):
             media_list = media
-        else:
+        elif isinstance(media, ImageData):
             media_list = [media]
+        else:
+            media_list = [_resolve_media_data(media)]
 
         if not media_list:
             warnings.warn(
