@@ -2,7 +2,7 @@
 
 import logging
 import warnings
-from typing import Any, Dict, List, Union
+from typing import Any
 
 from ...types.evaluation import EvaluationData
 from ...types.multimodal import ImageData, MultimodalInput
@@ -27,7 +27,7 @@ def _resolve_media_data(media_source: Any) -> ImageData:
     )
 
 
-def _build_media_content_block(media_data: ImageData) -> Dict[str, Any]:
+def _build_media_content_block(media_data: ImageData) -> dict[str, Any]:
     """Build a strands SDK content block from a media data instance.
 
     Returns the appropriate content block dict for the media type. Currently
@@ -47,7 +47,7 @@ def compose_multimodal_test_prompt(
     rubric: str,
     include_inputs: bool = True,
     include_media: bool = True,
-) -> Union[str, List[Dict[str, Any]]]:
+) -> str | list[dict[str, Any]]:
     """Compose the evaluation prompt for a multimodal test case.
 
     When ``include_media=True`` and media data is available, returns a list of
@@ -77,9 +77,9 @@ def compose_multimodal_test_prompt(
         "(NOT 0 to 10 OR 0 to 100). \n"
     ]
 
-    if include_inputs and isinstance(evaluation_case.input, dict):
-        instruction = evaluation_case.input.get("instruction", "")
-        context = evaluation_case.input.get("context", "")
+    if include_inputs and isinstance(evaluation_case.input, MultimodalInput):
+        instruction = evaluation_case.input.instruction
+        context = evaluation_case.input.context
         input_text = f"Context: {context}\nInstruction: {instruction}" if context else instruction
         text_parts.append(f"<Input>{input_text}</Input>\n")
     elif include_inputs:
@@ -97,8 +97,8 @@ def compose_multimodal_test_prompt(
     evaluation_text = "".join(text_parts)
 
     # Build multimodal content blocks when media is requested and available
-    if include_media and isinstance(evaluation_case.input, dict) and "media" in evaluation_case.input:
-        media = evaluation_case.input["media"]
+    if include_media and isinstance(evaluation_case.input, MultimodalInput) and evaluation_case.input.media:
+        media = evaluation_case.input.media
 
         # Normalize to list
         if isinstance(media, list):
@@ -117,7 +117,7 @@ def compose_multimodal_test_prompt(
             return evaluation_text
 
         # Build content blocks: all media first, then text
-        messages: List[Dict[str, Any]] = []
+        messages: list[dict[str, Any]] = []
         for media_item in media_list:
             media_data = _resolve_media_data(media_item)
             content_block = _build_media_content_block(media_data)

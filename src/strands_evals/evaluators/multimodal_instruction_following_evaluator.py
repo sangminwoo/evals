@@ -1,7 +1,6 @@
 """Instruction Following evaluator for multimodal tasks."""
 
 from strands.models.model import Model
-from typing_extensions import Union
 
 from .multimodal_output_evaluator import MultimodalOutputEvaluator
 from .prompt_templates.multimodal import INSTRUCTION_FOLLOWING_RUBRIC_V0
@@ -18,11 +17,11 @@ class MultimodalInstructionFollowingEvaluator(MultimodalOutputEvaluator):
 
     def __init__(
         self,
-        model: Union[Model, str, None] = None,
-        rubric: Union[str, None] = None,
+        model: Model | str | None = None,
+        rubric: str | None = None,
         include_media: bool = True,
         include_inputs: bool = True,
-        system_prompt: Union[str, None] = None,
+        system_prompt: str | None = None,
     ):
         super().__init__(
             rubric=rubric if rubric is not None else INSTRUCTION_FOLLOWING_RUBRIC_V0,

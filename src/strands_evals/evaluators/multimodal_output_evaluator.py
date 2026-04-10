@@ -2,13 +2,13 @@
 
 import logging
 import warnings
-from typing import List, Union, cast
+from typing import cast
 
 from strands import Agent
 from strands.models.model import Model
 from strands.types.content import ContentBlock
 
-from ..types.evaluation import EvaluationData, EvaluationOutput
+from ..types.evaluation import EvaluationData, EvaluationOutput, InputT, OutputT
 from ..types.multimodal import MultimodalInput
 from .output_evaluator import OutputEvaluator
 from .prompt_templates.multimodal_case_prompt_template import compose_multimodal_test_prompt
@@ -17,7 +17,7 @@ from .prompt_templates.multimodal_judge_system_prompt import MLLM_JUDGE_SYSTEM_P
 logger = logging.getLogger(__name__)
 
 
-class MultimodalOutputEvaluator(OutputEvaluator[MultimodalInput, str]):
+class MultimodalOutputEvaluator(OutputEvaluator[InputT, OutputT]):
     """MLLM-as-a-Judge evaluator for multimodal tasks.
 
     Extends OutputEvaluator to handle multimodal inputs containing media (images,
@@ -46,11 +46,11 @@ REFERENCE COMPARISON:
     def __init__(
         self,
         rubric: str,
-        model: Union[Model, str, None] = None,
+        model: Model | str | None = None,
         include_media: bool = True,
         include_inputs: bool = True,
-        system_prompt: Union[str, None] = None,
-        reference_suffix: Union[str, None] = None,
+        system_prompt: str | None = None,
+        reference_suffix: str | None = None,
     ):
         super().__init__(
             rubric=rubric,
@@ -61,7 +61,7 @@ REFERENCE COMPARISON:
         self.include_media = include_media
         self.reference_suffix = reference_suffix if reference_suffix is not None else self.DEFAULT_REFERENCE_SUFFIX
 
-    def _select_rubric(self, evaluation_case: EvaluationData[MultimodalInput, str]) -> str:
+    def _select_rubric(self, evaluation_case: EvaluationData[InputT, OutputT]) -> str:
         """Select the appropriate rubric based on whether a reference output is available.
 
         When expected_output is present, appends the reference comparison suffix to the rubric.
@@ -70,7 +70,7 @@ REFERENCE COMPARISON:
             return self.rubric + self.reference_suffix
         return self.rubric
 
-    def evaluate(self, evaluation_case: EvaluationData[MultimodalInput, str]) -> List[EvaluationOutput]:
+    def evaluate(self, evaluation_case: EvaluationData[InputT, OutputT]) -> list[EvaluationOutput]:
         """Evaluate a multimodal test case.
 
         Automatically appends reference comparison suffix to rubric when
@@ -82,9 +82,9 @@ REFERENCE COMPARISON:
         Returns:
             List containing a single EvaluationOutput with score, pass/fail, and reasoning.
         """
-        if self.include_media and isinstance(evaluation_case.input, dict) and "media" not in evaluation_case.input:
+        if self.include_media and isinstance(evaluation_case.input, MultimodalInput) and not evaluation_case.input.media:
             warnings.warn(
-                "include_media=True but no 'media' key found in input. Falling back to text-only evaluation.",
+                "include_media=True but no media found in input. Falling back to text-only evaluation.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -99,11 +99,11 @@ REFERENCE COMPARISON:
         )
 
         evaluator_agent = Agent(model=self.model, system_prompt=self.system_prompt, callback_handler=None)
-        prompt: Union[str, List[ContentBlock]] = cast(Union[str, List[ContentBlock]], evaluation_prompt)
+        prompt: str | list[ContentBlock] = cast(str | list[ContentBlock], evaluation_prompt)
         result = evaluator_agent(prompt, structured_output_model=EvaluationOutput)
         return [cast(EvaluationOutput, result.structured_output)]
 
-    async def evaluate_async(self, evaluation_case: EvaluationData[MultimodalInput, str]) -> List[EvaluationOutput]:
+    async def evaluate_async(self, evaluation_case: EvaluationData[InputT, OutputT]) -> list[EvaluationOutput]:
         """Evaluate a multimodal test case asynchronously.
 
         Automatically appends reference comparison suffix to rubric when
@@ -115,9 +115,9 @@ REFERENCE COMPARISON:
         Returns:
             List containing a single EvaluationOutput with score, pass/fail, and reasoning.
         """
-        if self.include_media and isinstance(evaluation_case.input, dict) and "media" not in evaluation_case.input:
+        if self.include_media and isinstance(evaluation_case.input, MultimodalInput) and not evaluation_case.input.media:
             warnings.warn(
-                "include_media=True but no 'media' key found in input. Falling back to text-only evaluation.",
+                "include_media=True but no media found in input. Falling back to text-only evaluation.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -132,6 +132,6 @@ REFERENCE COMPARISON:
         )
 
         evaluator_agent = Agent(model=self.model, system_prompt=self.system_prompt, callback_handler=None)
-        prompt: Union[str, List[ContentBlock]] = cast(Union[str, List[ContentBlock]], evaluation_prompt)
+        prompt: str | list[ContentBlock] = cast(str | list[ContentBlock], evaluation_prompt)
         result = await evaluator_agent.invoke_async(prompt, structured_output_model=EvaluationOutput)
         return [cast(EvaluationOutput, result.structured_output)]

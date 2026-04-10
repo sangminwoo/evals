@@ -363,16 +363,16 @@ from strands_evals.types import ImageData, MultimodalInput
 
 # Create image data from various sources
 image = ImageData(source="path/to/image.png")
-# Also supports: base64 strings, data URLs, HTTP URLs, S3 URIs, PIL Images, raw bytes
+# Also supports: base64 strings, data URLs, HTTP URLs, PIL Images, raw bytes
 
 # Define test cases with multimodal input
 test_cases = [
     Case[MultimodalInput, str](
         name="image-description-1",
-        input={
-            "media": image,
-            "instruction": "Describe the contents of this image in detail.",
-        },
+        input=MultimodalInput(
+            media=image,
+            instruction="Describe the contents of this image in detail.",
+        ),
     )
 ]
 
@@ -389,7 +389,11 @@ experiment = Experiment[MultimodalInput, str](cases=test_cases, evaluators=evalu
 
 def get_response(case: Case) -> str:
     agent = Agent(callback_handler=None)
-    return str(agent(case.input["instruction"]))
+    image = case.input.media
+    return str(agent([
+        {"image": {"format": image.format or "png", "source": {"bytes": image.to_bytes()}}},
+        {"text": case.input.instruction}
+    ]))
 
 reports = experiment.run_evaluations(get_response)
 reports[0].run_display()
