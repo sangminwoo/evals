@@ -2,13 +2,10 @@
 
 import logging
 import warnings
-from typing import cast
 
-from strands import Agent
 from strands.models.model import Model
-from strands.types.content import ContentBlock
 
-from ..types.evaluation import EvaluationData, EvaluationOutput, InputT, OutputT
+from ..types.evaluation import EvaluationData, InputT, OutputT
 from ..types.multimodal import MultimodalInput
 from .output_evaluator import OutputEvaluator
 from .prompt_templates.multimodal_case_prompt_template import compose_multimodal_test_prompt
@@ -70,68 +67,35 @@ REFERENCE COMPARISON:
             return self.rubric + self.reference_suffix
         return self.rubric
 
-    def evaluate(self, evaluation_case: EvaluationData[InputT, OutputT]) -> list[EvaluationOutput]:
-        """Evaluate a multimodal test case.
+    def _build_prompt(self, evaluation_case: EvaluationData[InputT, OutputT]) -> str | list:
+        """Build the evaluation prompt for a multimodal test case.
 
-        Automatically appends reference comparison suffix to rubric when
-        ``expected_output`` is provided, otherwise uses the rubric as-is.
+        Composes a prompt that may include media content blocks (for MLLM-as-a-Judge)
+        or text only (for LLM-as-a-Judge), and appends reference comparison suffix
+        when expected_output is available.
 
         Args:
-            evaluation_case: Test case with multimodal input and expected/actual outputs.
+            evaluation_case: The test case with multimodal input and expected/actual outputs.
 
         Returns:
-            List containing a single EvaluationOutput with score, pass/fail, and reasoning.
+            Either a text prompt string or a list of content blocks with media.
         """
-        if self.include_media and isinstance(evaluation_case.input, MultimodalInput) and not evaluation_case.input.media:
+        if (
+            self.include_media
+            and isinstance(evaluation_case.input, MultimodalInput)
+            and not evaluation_case.input.media
+        ):
             warnings.warn(
                 "include_media=True but no media found in input. Falling back to text-only evaluation.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
 
         effective_rubric = self._select_rubric(evaluation_case)
 
-        evaluation_prompt = compose_multimodal_test_prompt(
+        return compose_multimodal_test_prompt(
             evaluation_case=evaluation_case,
             rubric=effective_rubric,
             include_inputs=self.include_inputs,
             include_media=self.include_media,
         )
-
-        evaluator_agent = Agent(model=self.model, system_prompt=self.system_prompt, callback_handler=None)
-        prompt: str | list[ContentBlock] = cast(str | list[ContentBlock], evaluation_prompt)
-        result = evaluator_agent(prompt, structured_output_model=EvaluationOutput)
-        return [cast(EvaluationOutput, result.structured_output)]
-
-    async def evaluate_async(self, evaluation_case: EvaluationData[InputT, OutputT]) -> list[EvaluationOutput]:
-        """Evaluate a multimodal test case asynchronously.
-
-        Automatically appends reference comparison suffix to rubric when
-        ``expected_output`` is provided, otherwise uses the rubric as-is.
-
-        Args:
-            evaluation_case: Test case with multimodal input and expected/actual outputs.
-
-        Returns:
-            List containing a single EvaluationOutput with score, pass/fail, and reasoning.
-        """
-        if self.include_media and isinstance(evaluation_case.input, MultimodalInput) and not evaluation_case.input.media:
-            warnings.warn(
-                "include_media=True but no media found in input. Falling back to text-only evaluation.",
-                UserWarning,
-                stacklevel=2,
-            )
-
-        effective_rubric = self._select_rubric(evaluation_case)
-
-        evaluation_prompt = compose_multimodal_test_prompt(
-            evaluation_case=evaluation_case,
-            rubric=effective_rubric,
-            include_inputs=self.include_inputs,
-            include_media=self.include_media,
-        )
-
-        evaluator_agent = Agent(model=self.model, system_prompt=self.system_prompt, callback_handler=None)
-        prompt: str | list[ContentBlock] = cast(str | list[ContentBlock], evaluation_prompt)
-        result = await evaluator_agent.invoke_async(prompt, structured_output_model=EvaluationOutput)
-        return [cast(EvaluationOutput, result.structured_output)]
