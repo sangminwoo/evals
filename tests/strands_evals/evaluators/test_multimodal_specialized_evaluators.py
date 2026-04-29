@@ -62,8 +62,8 @@ class TestMultimodalCorrectnessEvaluator:
 
         assert evaluator.rubric == CORRECTNESS_RUBRIC_V0
         assert evaluator.model is None
-        assert evaluator.include_media is True
         assert evaluator.include_inputs is True
+        assert evaluator.uses_environment_state is False
         assert isinstance(evaluator, MultimodalOutputEvaluator)
 
     def test_init_custom_rubric(self):
@@ -73,10 +73,6 @@ class TestMultimodalCorrectnessEvaluator:
     def test_init_custom_model(self):
         evaluator = MultimodalCorrectnessEvaluator(model="claude-3-sonnet")
         assert evaluator.model == "claude-3-sonnet"
-
-    def test_init_media_disabled(self):
-        evaluator = MultimodalCorrectnessEvaluator(include_media=False)
-        assert evaluator.include_media is False
 
     def test_init_inputs_disabled(self):
         evaluator = MultimodalCorrectnessEvaluator(include_inputs=False)
@@ -113,8 +109,8 @@ class TestMultimodalFaithfulnessEvaluator:
 
         assert evaluator.rubric == FAITHFULNESS_RUBRIC_V0
         assert evaluator.model is None
-        assert evaluator.include_media is True
         assert evaluator.include_inputs is True
+        assert evaluator.uses_environment_state is False
         assert isinstance(evaluator, MultimodalOutputEvaluator)
 
     def test_init_custom_rubric(self):
@@ -151,8 +147,8 @@ class TestMultimodalInstructionFollowingEvaluator:
 
         assert evaluator.rubric == INSTRUCTION_FOLLOWING_RUBRIC_V0
         assert evaluator.model is None
-        assert evaluator.include_media is True
         assert evaluator.include_inputs is True
+        assert evaluator.uses_environment_state is False
         assert isinstance(evaluator, MultimodalOutputEvaluator)
 
     def test_init_custom_rubric(self):
@@ -185,8 +181,8 @@ class TestMultimodalOverallQualityEvaluator:
 
         assert evaluator.rubric == OVERALL_QUALITY_RUBRIC_V0
         assert evaluator.model is None
-        assert evaluator.include_media is True
         assert evaluator.include_inputs is True
+        assert evaluator.uses_environment_state is False
         assert isinstance(evaluator, MultimodalOutputEvaluator)
 
     def test_init_custom_rubric(self):
@@ -230,3 +226,39 @@ class TestMultimodalOverallQualityEvaluator:
 
         assert len(result) == 1
         assert result[0].score == 0.9
+
+
+# =============================================================================
+# Serialization round-trip
+# =============================================================================
+
+
+class TestEvaluatorRoundTrip:
+    """Regression tests for to_dict / from_dict round-trip.
+
+    Previously, ``to_dict()`` emitted ``uses_environment_state`` (set in the
+    parent init but missing from the subclass signature), which caused
+    ``from_dict`` to fail with TypeError on kwarg mismatch.
+    """
+
+    @pytest.mark.parametrize(
+        "evaluator_cls",
+        [
+            MultimodalCorrectnessEvaluator,
+            MultimodalFaithfulnessEvaluator,
+            MultimodalInstructionFollowingEvaluator,
+            MultimodalOverallQualityEvaluator,
+        ],
+    )
+    def test_to_dict_from_dict_round_trip(self, evaluator_cls):
+        original = evaluator_cls()
+        data = original.to_dict()
+
+        args = {k: v for k, v in data.items() if k != "evaluator_type"}
+        if "model_id" in args:
+            args["model"] = args.pop("model_id")
+
+        # Should not raise TypeError.
+        restored = evaluator_cls(**args)
+        assert restored.rubric == original.rubric
+        assert restored.uses_environment_state == original.uses_environment_state

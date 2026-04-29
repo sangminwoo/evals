@@ -93,7 +93,6 @@ async def test_multimodal_evaluator_basic_integration(city_image):
             "and key visual elements, "
             "0.5 if partially correct, 0.0 if completely wrong."
         ),
-        include_media=True,
         include_inputs=True,
     )
 
@@ -126,7 +125,6 @@ async def test_multimodal_evaluator_reference_based(flower_image):
             "Evaluate if the response correctly describes the image content. "
             "Score 1.0 for accurate descriptions, 0.0 for inaccurate ones."
         ),
-        include_media=True,
     )
 
     experiment = Experiment(cases=[test_case], evaluators=[evaluator])
@@ -162,7 +160,6 @@ async def test_multimodal_evaluator_reference_free(city_image):
             "completeness (0.3). A good description should mention "
             "the main subject, setting, and notable visual details."
         ),
-        include_media=True,
     )
 
     experiment = Experiment(cases=[test_case], evaluators=[evaluator])
@@ -178,18 +175,15 @@ async def test_multimodal_evaluator_reference_free(city_image):
 
 
 @pytest.mark.asyncio
-async def test_multimodal_evaluator_llm_mode(city_image):
-    """Text-only evaluation mode where media is excluded from the judge prompt."""
+async def test_multimodal_evaluator_text_only_input():
+    """Dispatch is data-driven: plain-text input evaluates as LLM-as-a-Judge."""
 
-    def multimodal_task(case: Case) -> str:
+    def text_task(case: Case) -> str:
         return "A brightly lit urban scene at night with tall buildings and illuminated commercial signage."
 
     test_case = Case(
-        name="llm_mode_test",
-        input=MultimodalInput(
-            media=city_image,
-            instruction="Describe the image.",
-        ),
+        name="text_only_test",
+        input="Describe a city at night.",
         expected_output="A city at night with neon signs and buildings.",
     )
 
@@ -199,12 +193,11 @@ async def test_multimodal_evaluator_llm_mode(city_image):
             "Score 1.0 if semantically similar, "
             "0.0 if completely different."
         ),
-        include_media=False,
         include_inputs=True,
     )
 
     experiment = Experiment(cases=[test_case], evaluators=[evaluator])
-    reports = await experiment.run_evaluations_async(multimodal_task)
+    reports = await experiment.run_evaluations_async(text_task)
 
     assert len(reports[0].scores) == 1
     assert reports[0].scores[0] >= 0.5
@@ -243,7 +236,6 @@ async def test_multimodal_evaluator_multiple_images(city_image, flower_image):
             "both images. Score 1.0 if both subjects are correctly "
             "identified, 0.0 if incorrect."
         ),
-        include_media=True,
     )
 
     experiment = Experiment(cases=[test_case], evaluators=[evaluator])
@@ -276,7 +268,6 @@ async def test_multimodal_evaluator_with_file_path(temp_image_file):
 
     evaluator = MultimodalOutputEvaluator(
         rubric=("Score 1.0 if the main subject of the image is correctly identified, 0.0 otherwise."),
-        include_media=True,
     )
 
     experiment = Experiment(cases=[test_case], evaluators=[evaluator])
@@ -307,7 +298,6 @@ def test_multimodal_evaluator_sync(flower_image):
 
     evaluator = MultimodalOutputEvaluator(
         rubric="Score 1.0 if outputs match semantically, 0.0 otherwise.",
-        include_media=True,
     )
 
     experiment = Experiment(cases=[test_case], evaluators=[evaluator])
@@ -348,7 +338,6 @@ async def test_multimodal_evaluator_with_context(flower_image):
             "context. Score based on relevance to the specified domain "
             "and accuracy of observations."
         ),
-        include_media=True,
         include_inputs=True,
     )
 
@@ -395,7 +384,6 @@ async def test_multimodal_evaluator_batch_processing(city_image, flower_image):
 
     evaluator = MultimodalOutputEvaluator(
         rubric=("Score 1.0 if the output correctly identifies the subject, 0.0 otherwise."),
-        include_media=True,
     )
 
     experiment = Experiment(cases=test_cases, evaluators=[evaluator])

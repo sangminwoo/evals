@@ -92,10 +92,10 @@ class TestMultimodalOutputEvaluatorInit:
 
         assert evaluator.rubric == "Test rubric"
         assert evaluator.model is None
-        assert evaluator.include_media is True
         assert evaluator.include_inputs is True
         assert evaluator.system_prompt is not None
         assert evaluator.reference_suffix == MultimodalOutputEvaluator.DEFAULT_REFERENCE_SUFFIX
+        assert evaluator.uses_environment_state is False
 
     def test_init_with_custom_values(self):
         custom_prompt = "Custom system prompt"
@@ -104,7 +104,6 @@ class TestMultimodalOutputEvaluatorInit:
         evaluator = MultimodalOutputEvaluator(
             rubric="Custom rubric",
             model="claude-3-sonnet",
-            include_media=False,
             include_inputs=False,
             system_prompt=custom_prompt,
             reference_suffix=custom_suffix,
@@ -112,15 +111,9 @@ class TestMultimodalOutputEvaluatorInit:
 
         assert evaluator.rubric == "Custom rubric"
         assert evaluator.model == "claude-3-sonnet"
-        assert evaluator.include_media is False
         assert evaluator.include_inputs is False
         assert evaluator.system_prompt == custom_prompt
         assert evaluator.reference_suffix == custom_suffix
-
-    def test_init_llm_mode(self):
-        """Test LLM-as-a-Judge mode (no media)."""
-        evaluator = MultimodalOutputEvaluator(rubric="Test rubric", include_media=False)
-        assert evaluator.include_media is False
 
 
 # =============================================================================
@@ -158,7 +151,7 @@ class TestSelectRubric:
 
 class TestBuildPrompt:
     def test_build_prompt_with_media_returns_list(self, evaluation_data_with_reference):
-        evaluator = MultimodalOutputEvaluator(rubric="Test rubric", include_media=True)
+        evaluator = MultimodalOutputEvaluator(rubric="Test rubric")
         result = evaluator._build_prompt(evaluation_data_with_reference)
 
         assert isinstance(result, list)
@@ -169,9 +162,15 @@ class TestBuildPrompt:
         # First block should be image
         assert "image" in result[0]
 
-    def test_build_prompt_without_media_returns_string(self, evaluation_data_with_reference):
-        evaluator = MultimodalOutputEvaluator(rubric="Test rubric", include_media=False)
-        result = evaluator._build_prompt(evaluation_data_with_reference)
+    def test_build_prompt_plain_text_input_returns_string(self):
+        """Plain (non-multimodal) input is evaluated as text-only."""
+        evaluator = MultimodalOutputEvaluator(rubric="Test rubric")
+        evaluation_data = EvaluationData(
+            input="Plain text instruction",
+            actual_output="Plain text output",
+            expected_output="Expected text",
+        )
+        result = evaluator._build_prompt(evaluation_data)
 
         assert isinstance(result, str)
         assert "<Output>" in result
@@ -179,44 +178,49 @@ class TestBuildPrompt:
         assert "<Rubric>" in result
 
     def test_build_prompt_includes_input_when_enabled(self, evaluation_data_with_reference):
-        evaluator = MultimodalOutputEvaluator(rubric="Test rubric", include_inputs=True, include_media=False)
+        evaluator = MultimodalOutputEvaluator(rubric="Test rubric", include_inputs=True)
         result = evaluator._build_prompt(evaluation_data_with_reference)
 
-        assert "<Input>" in result
-        assert "Describe this image" in result
+        # Text block is last when media is present
+        text_block = result[-1]["text"] if isinstance(result, list) else result
+        assert "<Input>" in text_block
+        assert "Describe this image" in text_block
 
     def test_build_prompt_excludes_input_when_disabled(self, evaluation_data_with_reference):
-        evaluator = MultimodalOutputEvaluator(rubric="Test rubric", include_inputs=False, include_media=False)
+        evaluator = MultimodalOutputEvaluator(rubric="Test rubric", include_inputs=False)
         result = evaluator._build_prompt(evaluation_data_with_reference)
 
-        assert "<Input>" not in result
+        text_block = result[-1]["text"] if isinstance(result, list) else result
+        assert "<Input>" not in text_block
 
     def test_build_prompt_includes_reference_suffix_when_expected_output_present(self, evaluation_data_with_reference):
-        evaluator = MultimodalOutputEvaluator(rubric="Test rubric", include_media=False)
+        evaluator = MultimodalOutputEvaluator(rubric="Test rubric")
         result = evaluator._build_prompt(evaluation_data_with_reference)
 
-        assert "REFERENCE COMPARISON" in result
+        text_block = result[-1]["text"] if isinstance(result, list) else result
+        assert "REFERENCE COMPARISON" in text_block
 
     def test_build_prompt_excludes_reference_suffix_when_no_expected_output(self, evaluation_data_without_reference):
-        evaluator = MultimodalOutputEvaluator(rubric="Test rubric", include_media=False)
+        evaluator = MultimodalOutputEvaluator(rubric="Test rubric")
         result = evaluator._build_prompt(evaluation_data_without_reference)
 
-        assert "REFERENCE COMPARISON" not in result
+        text_block = result[-1]["text"] if isinstance(result, list) else result
+        assert "REFERENCE COMPARISON" not in text_block
 
-    def test_build_prompt_warns_when_media_enabled_but_empty(self):
-        """Test warning when include_media=True but no media in input."""
+    def test_build_prompt_warns_when_multimodal_input_has_empty_media(self):
+        """Warn when input declares itself multimodal but carries no media."""
         empty_media_input = MultimodalInput(media=[], instruction="Test")
         evaluation_data = EvaluationData(
             input=empty_media_input,
             actual_output="Test output",
         )
-        evaluator = MultimodalOutputEvaluator(rubric="Test rubric", include_media=True)
+        evaluator = MultimodalOutputEvaluator(rubric="Test rubric")
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            evaluator._build_prompt(evaluation_data)
-            # Check if warning was raised
-            assert any("no media found" in str(warning.message).lower() for warning in w)
+            result = evaluator._build_prompt(evaluation_data)
+            assert any("empty media" in str(warning.message).lower() for warning in w)
+            assert isinstance(result, str)
 
 
 # =============================================================================
@@ -239,29 +243,34 @@ class TestEvaluate:
         assert result[0].test_pass is True
 
     @patch("strands_evals.evaluators.output_evaluator.Agent")
-    def test_evaluate_passes_content_blocks_to_agent(
+    def test_evaluate_with_media_passes_content_blocks(
         self, mock_agent_class, evaluation_data_with_reference, mock_agent
     ):
         mock_agent_class.return_value = mock_agent
-        evaluator = MultimodalOutputEvaluator(rubric="Test rubric", include_media=True)
+        evaluator = MultimodalOutputEvaluator(rubric="Test rubric")
 
         evaluator.evaluate(evaluation_data_with_reference)
 
         call_args = mock_agent.call_args
         prompt = call_args[0][0]
-        # When include_media=True, prompt should be a list of content blocks
+        # When input carries media, prompt should be a list of content blocks
         assert isinstance(prompt, list)
 
     @patch("strands_evals.evaluators.output_evaluator.Agent")
-    def test_evaluate_llm_mode_passes_string(self, mock_agent_class, evaluation_data_with_reference, mock_agent):
+    def test_evaluate_plain_text_input_passes_string(self, mock_agent_class, mock_agent):
+        """Plain-text input (no MultimodalInput) results in a string prompt."""
         mock_agent_class.return_value = mock_agent
-        evaluator = MultimodalOutputEvaluator(rubric="Test rubric", include_media=False)
+        evaluator = MultimodalOutputEvaluator(rubric="Test rubric")
+        evaluation_data = EvaluationData(
+            input="Plain text instruction",
+            actual_output="Plain text output",
+            expected_output="Expected",
+        )
 
-        evaluator.evaluate(evaluation_data_with_reference)
+        evaluator.evaluate(evaluation_data)
 
         call_args = mock_agent.call_args
         prompt = call_args[0][0]
-        # When include_media=False, prompt should be a string
         assert isinstance(prompt, str)
 
 
