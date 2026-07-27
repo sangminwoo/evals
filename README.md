@@ -38,6 +38,7 @@ Strands Evaluation is a powerful framework for evaluating AI agents and LLM appl
 
 - **Multiple Evaluation Types**: Output evaluation, trajectory analysis, tool usage assessment, and interaction evaluation
 - **Multimodal Evaluation**: MLLM-as-a-Judge evaluators for image-to-text tasks with built-in rubrics
+- **Skill Evaluation**: Assess which skills a skill-equipped agent selected and whether it followed their instructions
 - **Dynamic Simulators**: Multi-turn conversation simulation with realistic user behavior, goal-oriented interactions, and LLM-powered tool simulation with shared state
 - **LLM-as-a-Judge**: Built-in evaluators using language models for sophisticated assessment with structured scoring
 - **Trace-based Evaluation**: Analyze agent behavior through OpenTelemetry execution traces
@@ -516,6 +517,35 @@ tool_parameter_evaluator = ToolParameterAccuracyEvaluator(
     rubric="Score based on parameter accuracy and appropriateness for the task"
 )
 ```
+
+### Skill Selection and Instruction Following
+
+A skill is an instruction file (usually `SKILL.md`) that the harness offers to the agent at
+runtime; the agent decides which, if any, to load. Evaluate both halves of that behavior,
+which skill the agent picked and whether it then followed the skill's steps:
+
+```python
+from strands_evals.evaluators import (
+    SkillInstructionFollowingEvaluator,
+    SkillInvoked,
+    SkillSelectionAccuracyEvaluator,
+)
+
+# Was each invoked skill an appropriate pick? Binary, one result per invoked skill.
+# When no skill was invoked, judges whether abstaining was correct.
+selection_evaluator = SkillSelectionAccuracyEvaluator()
+
+# Did the agent follow the invoked skill's steps? Five-level rating, one result per
+# invoked skill, grounded in per-step covered/partial/skipped evidence.
+following_evaluator = SkillInstructionFollowingEvaluator()
+
+# Deterministic presence check, no model.
+invoked_check = SkillInvoked(skill_name="pdf-processing")
+```
+
+Both judges read the trajectory only, so any harness that emits one works: pass a `Session`
+or a raw message list as `actual_trajectory`. The skill signals are recovered by
+`parse_available_skills` and `extract_selected_skills` from `strands_evals.extractors`.
 
 ### Multimodal Evaluation (MLLM-as-a-Judge)
 

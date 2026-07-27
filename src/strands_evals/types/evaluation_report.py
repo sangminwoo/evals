@@ -29,6 +29,21 @@ class EvaluationReport(BaseModel):
     diagnoses: list[dict | None] = []
     recommendations: list[str | None] = []
 
+    @staticmethod
+    def calculate_overall_score(
+        scores: list[float],
+        detailed_results: list[list[EvaluationOutput]],
+    ) -> float:
+        """Average applicable rows while retaining N/A rows in report details."""
+        applicable_scores = [
+            score
+            for index, score in enumerate(scores)
+            if index >= len(detailed_results)
+            or not detailed_results[index]
+            or any(output.label != "not_applicable" for output in detailed_results[index])
+        ]
+        return sum(applicable_scores) / len(applicable_scores) if applicable_scores else 0.0
+
     @classmethod
     def flatten(cls, reports: list["EvaluationReport"]) -> "EvaluationReport":
         """Concatenate multiple evaluation reports into one.
@@ -53,7 +68,7 @@ class EvaluationReport(BaseModel):
                 recs.append(report.recommendations[i] if i < len(report.recommendations) else None)
 
         return cls(
-            overall_score=sum(scores) / len(scores) if scores else 0.0,
+            overall_score=cls.calculate_overall_score(scores, detailed),
             scores=scores,
             cases=cases,
             test_passes=passes,

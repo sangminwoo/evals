@@ -685,7 +685,10 @@ class Experiment(Generic[InputT, OutputT]):
             data = evaluator_data[eval_name]
             scores = data["scores"]
             report = EvaluationReport(
-                overall_score=sum(scores) / len(scores) if scores else 0,
+                overall_score=EvaluationReport.calculate_overall_score(
+                    scores,
+                    data["detailed_results"],
+                ),
                 scores=scores,
                 test_passes=data["test_passes"],
                 cases=data["cases"],

@@ -4,11 +4,66 @@ from pathlib import Path
 
 import pytest
 
+from strands_evals.types.evaluation import EvaluationOutput
 from strands_evals.types.evaluation_report import EvaluationReport
 
 
 class TestEvaluationReportFlatten:
     """Tests for the flatten() classmethod."""
+
+    def test_overall_score_excludes_not_applicable_rows(self):
+        applicable = [EvaluationOutput(score=1.0, test_pass=True, label="skill-a")]
+        not_applicable = [
+            EvaluationOutput(
+                score=0.0,
+                test_pass=True,
+                label="not_applicable",
+                reason="no skill invoked",
+            )
+        ]
+
+        assert (
+            EvaluationReport.calculate_overall_score(
+                [1.0, 0.0],
+                [applicable, not_applicable],
+            )
+            == 1.0
+        )
+
+    def test_overall_score_matches_plain_mean_when_no_row_is_not_applicable(self):
+        """Backward compatibility: with no not-applicable rows this is the plain mean.
+
+        Only the skill evaluators emit label="not_applicable", so this pins that the
+        aggregation is unchanged for every pre-existing evaluator.
+        """
+        scores = [1.0, 0.0, 0.5]
+        detailed_results = [
+            [EvaluationOutput(score=1.0, test_pass=True, label="appropriate")],
+            [EvaluationOutput(score=0.0, test_pass=False, label="inappropriate")],
+            [EvaluationOutput(score=0.5, test_pass=True)],
+        ]
+
+        assert EvaluationReport.calculate_overall_score(scores, detailed_results) == sum(scores) / len(scores)
+
+    def test_overall_score_counts_rows_with_any_applicable_output(self):
+        """A row is dropped only if every output in it is not-applicable."""
+        mixed = [
+            EvaluationOutput(score=1.0, test_pass=True, label="skill-a"),
+            EvaluationOutput(score=0.0, test_pass=True, label="not_applicable"),
+        ]
+
+        assert EvaluationReport.calculate_overall_score([1.0], [mixed]) == 1.0
+
+    def test_overall_score_is_zero_when_every_row_is_not_applicable(self):
+        not_applicable = [EvaluationOutput(score=0.0, test_pass=True, label="not_applicable")]
+
+        assert (
+            EvaluationReport.calculate_overall_score(
+                [0.0, 0.0],
+                [not_applicable, not_applicable],
+            )
+            == 0.0
+        )
 
     def test_flatten_empty_list(self):
         flattened = EvaluationReport.flatten([])
@@ -73,6 +128,35 @@ class TestEvaluationReportFlatten:
             "Equals",
         ]
 
+    def test_flatten_excludes_not_applicable_rows_from_overall_score(self):
+        applicable = EvaluationReport(
+            overall_score=1.0,
+            scores=[1.0],
+            cases=[{"name": "used"}],
+            test_passes=[True],
+            detailed_results=[[EvaluationOutput(score=1.0, test_pass=True, label="skill-a")]],
+        )
+        not_applicable = EvaluationReport(
+            overall_score=0.0,
+            scores=[0.0],
+            cases=[{"name": "unused"}],
+            test_passes=[True],
+            detailed_results=[
+                [
+                    EvaluationOutput(
+                        score=0.0,
+                        test_pass=True,
+                        label="not_applicable",
+                    )
+                ]
+            ],
+        )
+
+        flattened = EvaluationReport.flatten([applicable, not_applicable])
+
+        assert flattened.scores == [1.0, 0.0]
+        assert flattened.overall_score == 1.0
+
     def test_flatten_preserves_case_data(self):
         report = EvaluationReport(
             overall_score=0.5,
@@ -135,8 +219,6 @@ class TestEvaluationReportFlatten:
         assert flattened.reasons[1] == ""
 
     def test_flatten_preserves_detailed_results(self):
-        from strands_evals.types.evaluation import EvaluationOutput
-
         detailed = [EvaluationOutput(score=0.5, test_pass=True, reason="detail")]
         report = EvaluationReport(
             overall_score=0.5,

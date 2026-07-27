@@ -1,0 +1,148 @@
+from unittest.mock import Mock, patch
+
+import pytest
+
+from strands_evals.evaluators.skill_selection_accuracy_evaluator import (
+    SkillSelectionAccuracyEvaluator,
+    SkillSelectionRating,
+    SkillSelectionScore,
+)
+from strands_evals.types.evaluation import EvaluationData
+
+_MODULE = "strands_evals.evaluators.skill_selection_accuracy_evaluator.Agent"
+
+AVAILABLE_BLOCK = """<available_skills>
+<skill><name>pdf-processing</name><description>Extract text from PDFs.</description></skill>
+<skill><name>spreadsheet</name><description>Analyze spreadsheets.</description></skill>
+</available_skills>"""
+
+
+def _case(invoked: list[str] | str | None):
+    names = [invoked] if isinstance(invoked, str) else (invoked or [])
+    messages = [{"role": "system", "content": AVAILABLE_BLOCK}]
+    for i, name in enumerate(names):
+        tid = f"t{i}"
+        messages.append(
+            {
+                "role": "assistant",
+                "content": [{"toolUse": {"toolUseId": tid, "name": "skills", "input": {"skill_name": name}}}],
+            }
+        )
+        messages.append(
+            {"role": "user", "content": [{"toolResult": {"toolUseId": tid, "content": [{"text": "# Skill body"}]}}]}
+        )
+    return EvaluationData(input="Extract text from report.pdf", actual_output="done", actual_trajectory=messages)
+
+
+def test_init_defaults():
+    ev = SkillSelectionAccuracyEvaluator()
+    assert ev.version == "v0"
+    assert ev.model is None
+    assert ev.system_prompt is not None
+    # unlike the tool evaluator, it does NOT slice via TraceExtractor
+    assert ev.evaluation_level is None
+
+
+def test_prompt_focuses_on_one_invoked_skill():
+    ev = SkillSelectionAccuracyEvaluator()
+    prompt = ev._build_prompt(_case("pdf-processing"), focus_skill="pdf-processing")
+    assert "pdf-processing: Extract text from PDFs." in prompt  # available list
+    assert "invoked the skill: pdf-processing" in prompt  # focal decision
+    assert "Agent trajectory" in prompt
+    assert "report.pdf" in prompt
+
+
+def test_prompt_abstention_mode():
+    ev = SkillSelectionAccuracyEvaluator()
+    prompt = ev._build_prompt(_case(None), focus_skill=None)
+    assert "invoked no skill (abstained)" in prompt
+
+
+@pytest.mark.parametrize(
+    "score,expected_value,expected_pass",
+    [
+        (SkillSelectionScore.YES, 1.0, True),
+        (SkillSelectionScore.NO, 0.0, False),
+    ],
+)
+@patch(_MODULE)
+def test_evaluate_score_mapping_labels_by_skill(mock_agent_class, score, expected_value, expected_pass):
+    mock_agent = Mock()
+    mock_result = Mock()
+    mock_result.structured_output = SkillSelectionRating(reasoning="because", score=score)
+    mock_agent.return_value = mock_result
+    mock_agent_class.return_value = mock_agent
+
+    result = SkillSelectionAccuracyEvaluator().evaluate(_case("pdf-processing"))
+
+    # one output for the single invoked skill, labeled by skill name
+    assert len(result) == 1
+    assert result[0].score == expected_value
+    assert result[0].test_pass is expected_pass
+    assert result[0].label == "pdf-processing"
+    assert result[0].reason == "because"
+
+
+@patch(_MODULE)
+def test_evaluate_loops_per_invoked_skill(mock_agent_class):
+    mock_agent = Mock()
+    mock_result = Mock()
+    mock_result.structured_output = SkillSelectionRating(reasoning="fits", score=SkillSelectionScore.YES)
+    mock_agent.return_value = mock_result
+    mock_agent_class.return_value = mock_agent
+
+    result = SkillSelectionAccuracyEvaluator().evaluate(_case(["pdf-processing", "spreadsheet"]))
+
+    # one EvaluationOutput per invoked skill, each labeled by its skill name
+    assert len(result) == 2
+    assert {r.label for r in result} == {"pdf-processing", "spreadsheet"}
+    assert mock_agent.call_count == 2
+
+
+@patch(_MODULE)
+def test_missing_trajectory_is_not_scored_as_abstention(mock_agent_class):
+    """A None trajectory is absent data, so it must not read as a correct abstention."""
+    case = EvaluationData(input="do pdf", actual_output="done", actual_trajectory=None)
+
+    result = SkillSelectionAccuracyEvaluator().evaluate(case)
+
+    assert len(result) == 1
+    assert result[0].label == "not_applicable"
+    assert result[0].score == 0.0
+    assert result[0].test_pass is False
+    mock_agent_class.assert_not_called()  # no judge call on missing data
+
+
+@patch(_MODULE)
+def test_evaluate_abstention_single_row(mock_agent_class):
+    # No skill invoked: one row judging the abstention, labeled "abstained".
+    mock_agent = Mock()
+    mock_result = Mock()
+    mock_result.structured_output = SkillSelectionRating(reasoning="none fit", score=SkillSelectionScore.YES)
+    mock_agent.return_value = mock_result
+    mock_agent_class.return_value = mock_agent
+
+    result = SkillSelectionAccuracyEvaluator().evaluate(_case(None))
+    assert len(result) == 1
+    assert result[0].score == 1.0
+    assert result[0].label == "abstained"
+    assert mock_agent.call_count == 1
+
+
+@pytest.mark.asyncio
+@patch(_MODULE)
+async def test_evaluate_async_loops_per_skill(mock_agent_class):
+    mock_agent = Mock()
+
+    async def mock_invoke_async(*args, **kwargs):
+        mock_result = Mock()
+        mock_result.structured_output = SkillSelectionRating(reasoning="ok", score=SkillSelectionScore.YES)
+        return mock_result
+
+    mock_agent.invoke_async = mock_invoke_async
+    mock_agent_class.return_value = mock_agent
+
+    result = await SkillSelectionAccuracyEvaluator().evaluate_async(_case(["pdf-processing", "spreadsheet"]))
+    assert len(result) == 2
+    assert {r.label for r in result} == {"pdf-processing", "spreadsheet"}
+    assert all(r.score == 1.0 for r in result)
