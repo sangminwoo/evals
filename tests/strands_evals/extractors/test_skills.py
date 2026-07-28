@@ -473,6 +473,99 @@ def test_command_execution_skill_read_uses_frontmatter_name():
     assert extract_selected_skills(messages) == [("canonical-skill", body)]
 
 
+def _shell_command(command: str, output: str = "col1,col2\n1,2", exit_code: int = 0):
+    return [
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "command": command,
+                "status": "completed",
+                "exit_code": exit_code,
+                "aggregated_output": output,
+            },
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat draft.md > /skills/my-new-skill/SKILL.md",  # writes a skill, does not load one
+        "echo '# Steps' >> /skills/my-new-skill/SKILL.md",
+        "sed -i 's/a/b/' /skills/pdf-processing/SKILL.md",  # edits in place
+        "sed --in-place 's/a/b/' /skills/pdf-processing/SKILL.md",
+        "echo '# Steps' | tee /skills/my-new-skill/SKILL.md",
+        "cat data.csv; ls -l /skills/pdf-processing/SKILL.md",  # verb and path, different commands
+        "grep -n Extract /skills/pdf-processing/SKILL.md",  # not a read of the whole file
+    ],
+)
+def test_shell_command_that_does_not_read_a_skill_is_not_an_invocation(command):
+    """The read verb has to own the path, not merely appear somewhere in the same line.
+
+    Searching for a verb and a path independently makes writes and unrelated work look like
+    skill loads, and the phantom body is whatever the command happened to print.
+    """
+    assert extract_selected_skills(_shell_command(command)) == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat /skills/pdf-processing/SKILL.md",
+        "sed -n '1,220p' /skills/pdf-processing/SKILL.md",
+        "/bin/bash -lc \"sed -n '1,220p' /skills/pdf-processing/SKILL.md\"",  # harness wrapper
+        "sudo cat /skills/pdf-processing/SKILL.md",
+        "cat /skills/pdf-processing/SKILL.md | head -20",  # paged
+        "cd /tmp && cat /skills/pdf-processing/SKILL.md",  # read in a later segment
+        "cat draft.md > /tmp/out.md; cat /skills/pdf-processing/SKILL.md",  # write then read
+    ],
+)
+def test_shell_read_of_a_skill_is_an_invocation(command):
+    body = "# PDF Processing\n1. Identify the path.\n2. Extract."
+
+    assert extract_selected_skills(_shell_command(command, output=body)) == [("pdf-processing", body)]
+
+
+@pytest.mark.parametrize(
+    "command,expected",
+    [
+        ("cat data.csv > /skills/my-new-skill/SKILL.md", []),
+        ("cat /skills/pdf-processing/SKILL.md", [("pdf-processing", "# PDF Processing\n1. Extract.")]),
+    ],
+)
+def test_shell_tool_read_uses_the_same_rule_as_command_execution(command, expected):
+    """A `bash` tool call and a Codex `command_execution` event are the same shell command."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "b1", "name": "bash", "input": {"command": command}}}],
+        },
+        {
+            "role": "user",
+            "content": [{"toolResult": {"toolUseId": "b1", "content": [{"text": "# PDF Processing\n1. Extract."}]}}],
+        },
+    ]
+
+    assert extract_selected_skills(messages) == expected
+
+
+def test_sigpipe_exit_code_does_not_discard_a_read_body():
+    """`cat SKILL.md | head -20` exits 141 once head closes the pipe, having printed the body."""
+    body = "# PDF Processing\n1. Identify the path."
+
+    invoked = extract_selected_skills(
+        _shell_command("cat /skills/pdf-processing/SKILL.md | head -20", output=body, exit_code=141)
+    )
+
+    assert invoked == [("pdf-processing", body)]
+
+
+def test_failing_read_is_still_discarded():
+    """Only SIGPIPE is tolerated; a read that actually failed carries no body."""
+    assert extract_selected_skills(_shell_command("cat /skills/pdf/SKILL.md", output="No such file", exit_code=1)) == []
+
+
 def test_malformed_frontmatter_body_falls_back_to_path_name():
     # A SKILL.md whose frontmatter is not parseable YAML must not abort the whole
     # extraction; the name degrades to the directory alias and the body is kept.

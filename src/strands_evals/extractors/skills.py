@@ -78,7 +78,18 @@ _SKILL_PATH = re.compile(
     r'"([^"\n]*SKILL\.md)"|\'([^\'\n]*SKILL\.md)\'|([^\s"\'=;|<>]*SKILL\.md)',
     re.IGNORECASE,
 )
-_READ_COMMAND = re.compile(r"\b(?:cat|sed|head|tail|bat|less|type|Get-Content)\b", re.IGNORECASE)
+_READ_VERBS = {"cat", "sed", "head", "tail", "bat", "less", "type", "get-content"}
+# `bash -lc "..."`, `/bin/sh -c '...'`: the real command is inside the quotes.
+_SHELL_WRAPPER = re.compile(
+    r"^\s*(?:\S*/)?(?:ba|da|k|z)?sh\s+(?:-\w+\s+)*(?P<quote>['\"])(?P<inner>.*)(?P=quote)\s*$",
+    re.DOTALL,
+)
+# Command separators. Splitting inside a quoted argument is harmless here: the pieces are only
+# used to locate a read verb and a path, and a quoted separator does not produce either.
+_SHELL_SEPARATOR = re.compile(r"\|\||&&|[;|\n]")
+# Leading noise before the verb: `sudo`, `env`, `FOO=bar`, `command`, `time`.
+_SHELL_PREFIX = re.compile(r"^(?:sudo|env|command|time|nohup|\S+=\S*)\s+", re.IGNORECASE)
+_SED_IN_PLACE = re.compile(r"(?:^|\s)(?:-i\S*|--in-place\b)")
 _READ_TOOL_NAMES = {
     "read",
     "read_file",
@@ -89,6 +100,10 @@ _READ_TOOL_NAMES = {
 _SHELL_TOOL_NAMES = {"bash", "shell", "terminal", "command", "execute_command", "run_command"}
 _DISCOVERY_TOOL_NAMES = {"list_skills", "search_skills"}
 _FAILED_STATUSES = {"error", "errored", "fail", "failed", "failure", "cancelled", "canceled"}
+# Exit codes that still leave usable output on stdout. 141 is SIGPIPE, which is what a paged read
+# reports: `cat SKILL.md | head -20` exits 141 once head closes the pipe, having printed the part
+# of the file the agent actually saw. Treating that as a failed load discards a real skill body.
+_SUCCESS_EXIT_CODES = {None, 0, "0", 141, "141"}
 _ACKNOWLEDGEMENT = re.compile(
     # A load acknowledgement is not the skill body. Harnesses word this either way round
     # ("Launching skill: x", or Gemini CLI's "Skill activated. Resources loaded from ..."),
@@ -261,7 +276,7 @@ def _result_failed(result: Any) -> bool:
         status in _FAILED_STATUSES
         or value.get("is_error") is True
         or value.get("error") not in (None, "", False)
-        or exit_code not in (None, 0, "0")
+        or exit_code not in _SUCCESS_EXIT_CODES
     )
     if failed:
         return True
@@ -332,6 +347,39 @@ def _skill_path_from_text(value: str) -> str | None:
     return next(group for group in match.groups() if group is not None)
 
 
+def _shell_read_skill_path(command: str) -> str | None:
+    """Return the `SKILL.md` path a shell command reads, or None if it does not read one.
+
+    The verb and the path have to belong to the same command, and the path has to be an operand
+    of that verb rather than anywhere in the line. Searching the whole command independently
+    turns writes and unrelated work into phantom skill loads that the judge then scores:
+
+        cat draft.md > /skills/new/SKILL.md   # creates a skill, does not load one
+        sed -i 's/a/b/' /skills/pdf/SKILL.md  # edits it
+        cat data.csv; ls -l /skills/pdf/SKILL.md
+    """
+    if wrapper := _SHELL_WRAPPER.match(command):
+        command = wrapper.group("inner")
+
+    for segment in _SHELL_SEPARATOR.split(command):
+        # A redirection target is a write, not a read, whichever verb precedes it.
+        head = segment.split(">")[0]
+        while (stripped := _SHELL_PREFIX.sub("", head, count=1)) != head:
+            head = stripped
+        parts = head.split()
+        if not parts:
+            continue
+        verb = parts[0].rsplit("/", 1)[-1].casefold()
+        if verb not in _READ_VERBS:
+            continue
+        if verb == "sed" and _SED_IN_PLACE.search(head):
+            continue  # `sed -i` rewrites the file
+        operands = head[len(parts[0]) :]
+        if path := _skill_path_from_text(operands):
+            return path
+    return None
+
+
 def _skill_read_path(tool_name: str, arguments: dict[str, Any]) -> str | None:
     """Return a SKILL.md path only for recognizable file-read operations."""
     lowered = tool_name.casefold()
@@ -343,8 +391,8 @@ def _skill_read_path(tool_name: str, arguments: dict[str, Any]) -> str | None:
 
     if lowered in _SHELL_TOOL_NAMES:
         command = arguments.get("command") or arguments.get("cmd")
-        if isinstance(command, str) and _READ_COMMAND.search(command):
-            return _skill_path_from_text(command)
+        if isinstance(command, str):
+            return _shell_read_skill_path(command)
     return None
 
 
@@ -708,12 +756,7 @@ def _selected_from_list(messages: list[Any]) -> list[InvokedSkill]:
         if block.get("type") == "command_execution":
             command = block.get("command")
             body = _body_from_result(block)
-            if (
-                isinstance(command, str)
-                and _READ_COMMAND.search(command)
-                and (path := _skill_path_from_text(command))
-                and body
-            ):
+            if isinstance(command, str) and (path := _shell_read_skill_path(command)) and body:
                 out.append(InvokedSkill(_skill_name_from_body(body, path), body))
             continue
 
