@@ -764,6 +764,70 @@ def test_agent_skills_status_string_is_not_a_body_on_the_session_path(result_tex
     assert invoked[0].body is None
 
 
+# The two plugin strings above that mean no skill was loaded. The third
+# ("activated (no instructions available)") is a real load of a skill with no body, so it stays
+# `loaded`: the agent did receive the skill, there was just nothing prescriptive in it.
+_AGENT_SKILLS_REFUSALS = _AGENT_SKILLS_NON_BODIES[:2]
+
+
+@pytest.mark.parametrize("result_text", _AGENT_SKILLS_REFUSALS)
+def test_agent_skills_refusal_is_recorded_as_a_failed_load(result_text):
+    """A mistyped lookup key is a refused load, not a load whose body went uncaptured.
+
+    `@tool` marks the plugin's plain-string return `status="success"`, so the text is the only
+    signal. Without reading it, requesting `pdf-procesing` for a registered `pdf-processing`
+    reports as a successful invocation and the adherence judge blames the agent for not
+    following instructions it never received.
+    """
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "t1", "name": "skills", "input": {"skill_name": "pdf-procesing"}}}],
+        },
+        {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": [{"text": result_text}]}}]},
+    ]
+
+    invoked = extract_selected_skills(messages)
+
+    assert invoked == [_failed("pdf-procesing")]
+
+
+@pytest.mark.parametrize("result_text", _AGENT_SKILLS_REFUSALS)
+def test_agent_skills_refusal_is_recorded_as_a_failed_load_on_the_session_path(result_text):
+    tool_span = ToolExecutionSpan(
+        span_info=_span_info(),
+        tool_call=ToolCall(name="skills", arguments={"skill_name": "pdf-procesing"}, tool_call_id="tu-1"),
+        tool_result=ToolResult(content=result_text),
+    )
+
+    invoked = extract_selected_skills(_session([tool_span]))
+
+    assert invoked == [_failed("pdf-procesing")]
+
+
+def test_a_skill_that_activated_with_no_instructions_still_counts_as_loaded():
+    """An empty skill is not a refusal: the agent got what it asked for, body and all."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "t1", "name": "skills", "input": {"skill_name": "pdf-processing"}}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "toolResult": {
+                        "toolUseId": "t1",
+                        "content": [{"text": "Skill 'pdf-processing' activated (no instructions available)."}],
+                    }
+                }
+            ],
+        },
+    ]
+
+    assert extract_selected_skills(messages) == [_loaded("pdf-processing", None)]
+
+
 def test_body_mentioning_a_missing_file_is_kept():
     """The load-error filter matches a whole status line, not the words wherever they appear."""
     body = "# PDF Processing\n\n1. If the skill file is not found, stop.\n2. Extract the text."

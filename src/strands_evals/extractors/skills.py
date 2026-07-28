@@ -218,7 +218,7 @@ def _selected_from_session(session: Session) -> list[InvokedSkill]:
             failed = bool(span.tool_result.error)
             skill_name = _skill_name_from_args(span.tool_call.name, span.tool_call.arguments)
             if skill_name is not None:
-                if failed:
+                if failed or _load_refused(span.tool_result.content):
                     out.append(InvokedSkill(name=skill_name, body=None, status="failed"))
                 else:
                     out.append(InvokedSkill(name=skill_name, body=_body_from_result(span.tool_result.content)))
@@ -297,6 +297,19 @@ def _result_failed(result: Any) -> bool:
         for key in ("response", "result")
         if key in value and _as_dict(value[key]) is not None
     )
+
+
+def _load_refused(result: Any) -> bool:
+    """Whether the load was refused, including refusals the harness marks successful.
+
+    A plugin can report a lookup failure in the payload rather than in the status. The Strands
+    AgentSkills plugin returns "Skill 'x' not found. ..." as a plain string from an `@tool`
+    function, and `@tool` reports a plain string return as `status="success"`, so the only signal
+    that no skill was loaded is the text. Recognizing it here is what separates a refused load
+    from a load whose body simply was not captured: both have `body=None`, but only the refusal
+    means the agent never received instructions.
+    """
+    return _result_failed(result) or bool(_LOAD_ERROR.fullmatch(_content_text(result).strip()))
 
 
 def _body_from_result(result: Any) -> str | None:
@@ -694,7 +707,7 @@ def _tool_result(block: dict[str, Any]) -> tuple[str | None, bool, str | None] |
         return None
     return (
         str(result_id) if result_id is not None else None,
-        _result_failed(raw_result),
+        _load_refused(raw_result),
         _body_from_result(raw_result),
     )
 
