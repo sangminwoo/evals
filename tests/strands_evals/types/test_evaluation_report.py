@@ -4,8 +4,34 @@ from pathlib import Path
 
 import pytest
 
-from strands_evals.types.evaluation import EvaluationOutput
+from strands_evals.types.evaluation import NOT_APPLICABLE, EvaluationOutput
 from strands_evals.types.evaluation_report import EvaluationReport
+
+
+class TestNotApplicableLabel:
+    """The shared not-applicable marker every reader of a score has to agree on."""
+
+    def test_not_applicable_is_recognized_by_the_property(self):
+        assert EvaluationOutput(score=0.0, test_pass=True, label=NOT_APPLICABLE).not_applicable is True
+
+    def test_a_judged_row_is_applicable(self):
+        assert EvaluationOutput(score=1.0, test_pass=True, label="Yes").not_applicable is False
+
+    def test_an_unlabeled_row_is_applicable(self):
+        """Most evaluators leave `label` unset, and their scores are still verdicts."""
+        assert EvaluationOutput(score=0.5, test_pass=True).not_applicable is False
+
+    def test_is_applicable_needs_only_one_judged_row(self):
+        mixed = [
+            EvaluationOutput(score=1.0, test_pass=True, label="Yes"),
+            EvaluationOutput(score=0.0, test_pass=True, label=NOT_APPLICABLE),
+        ]
+        assert EvaluationReport.is_applicable(mixed) is True
+        assert EvaluationReport.is_applicable(mixed[1:]) is False
+
+    def test_a_case_with_no_rows_at_all_is_left_in(self):
+        """An evaluator that produced nothing is not the same as one that judged nothing."""
+        assert EvaluationReport.is_applicable([]) is True
 
 
 class TestEvaluationReportFlatten:
@@ -17,7 +43,7 @@ class TestEvaluationReportFlatten:
             EvaluationOutput(
                 score=0.0,
                 test_pass=True,
-                label="not_applicable",
+                label=NOT_APPLICABLE,
                 reason="no skill invoked",
             )
         ]
@@ -33,7 +59,7 @@ class TestEvaluationReportFlatten:
     def test_overall_score_matches_plain_mean_when_no_row_is_not_applicable(self):
         """Backward compatibility: with no not-applicable rows this is the plain mean.
 
-        Only the skill evaluators emit label="not_applicable", so this pins that the
+        Only the skill evaluators emit label=NOT_APPLICABLE, so this pins that the
         aggregation is unchanged for every pre-existing evaluator.
         """
         scores = [1.0, 0.0, 0.5]
@@ -49,13 +75,13 @@ class TestEvaluationReportFlatten:
         """A row is dropped only if every output in it is not-applicable."""
         mixed = [
             EvaluationOutput(score=1.0, test_pass=True, label="skill-a"),
-            EvaluationOutput(score=0.0, test_pass=True, label="not_applicable"),
+            EvaluationOutput(score=0.0, test_pass=True, label=NOT_APPLICABLE),
         ]
 
         assert EvaluationReport.calculate_overall_score([1.0], [mixed]) == 1.0
 
     def test_overall_score_is_zero_when_every_row_is_not_applicable(self):
-        not_applicable = [EvaluationOutput(score=0.0, test_pass=True, label="not_applicable")]
+        not_applicable = [EvaluationOutput(score=0.0, test_pass=True, label=NOT_APPLICABLE)]
 
         assert (
             EvaluationReport.calculate_overall_score(
@@ -146,7 +172,7 @@ class TestEvaluationReportFlatten:
                     EvaluationOutput(
                         score=0.0,
                         test_pass=True,
-                        label="not_applicable",
+                        label=NOT_APPLICABLE,
                     )
                 ]
             ],

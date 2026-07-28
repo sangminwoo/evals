@@ -8,7 +8,7 @@ from strands_evals.evaluators.skill_selection_accuracy_evaluator import (
     SkillSelectionScore,
 )
 from strands_evals.extractors import InvokedSkill
-from strands_evals.types.evaluation import EvaluationData
+from strands_evals.types.evaluation import NOT_APPLICABLE, EvaluationData, EvaluationOutput
 
 _MODULE = "strands_evals.evaluators.skill_selection_accuracy_evaluator.Agent"
 
@@ -42,6 +42,24 @@ def test_init_defaults():
     assert ev.system_prompt is not None
     # unlike the tool evaluator, it does NOT slice via TraceExtractor
     assert ev.evaluation_level is None
+
+
+def test_aggregator_drops_not_applicable_rows():
+    """A case with one judged skill and one unjudgeable row is not half right.
+
+    The per-case aggregate has to drop the same rows `calculate_overall_score` drops, or the
+    case score reported in the table disagrees with the overall score computed from it.
+    """
+    ev = SkillSelectionAccuracyEvaluator()
+    assert ev.aggregator == ev._aggregate_dropping_na
+
+    rows = [
+        EvaluationOutput(score=1.0, test_pass=True, reason="pdf-processing: fits", label="Yes"),
+        EvaluationOutput(score=0.0, test_pass=True, reason="no skills were available", label=NOT_APPLICABLE),
+    ]
+    avg, all_pass, _ = ev.aggregator(rows)
+    assert avg == 1.0
+    assert all_pass is True
 
 
 def test_prompt_focuses_on_one_invoked_skill():
@@ -85,7 +103,7 @@ def test_prompt_abstention_mode():
     ],
 )
 @patch(_MODULE)
-def test_evaluate_score_mapping_labels_by_skill(mock_agent_class, score, expected_value, expected_pass):
+def test_evaluate_score_mapping_labels_by_rating(mock_agent_class, score, expected_value, expected_pass):
     mock_agent = Mock()
     mock_result = Mock()
     mock_result.structured_output = SkillSelectionRating(reasoning="because", score=score)
@@ -94,12 +112,13 @@ def test_evaluate_score_mapping_labels_by_skill(mock_agent_class, score, expecte
 
     result = SkillSelectionAccuracyEvaluator().evaluate(_case("pdf-processing"))
 
-    # one output for the single invoked skill, labeled by skill name
+    # One output for the single invoked skill. `label` is the judge's rating, as in every other
+    # judge in the framework; which decision the row is about is named in `reason`.
     assert len(result) == 1
     assert result[0].score == expected_value
     assert result[0].test_pass is expected_pass
-    assert result[0].label == "pdf-processing"
-    assert result[0].reason == "because"
+    assert result[0].label == score.value
+    assert result[0].reason == "pdf-processing: because"
 
 
 @patch(_MODULE)
@@ -112,9 +131,9 @@ def test_evaluate_loops_per_invoked_skill(mock_agent_class):
 
     result = SkillSelectionAccuracyEvaluator().evaluate(_case(["pdf-processing", "spreadsheet"]))
 
-    # one EvaluationOutput per invoked skill, each labeled by its skill name
+    # one EvaluationOutput per invoked skill, each naming its skill in `reason`
     assert len(result) == 2
-    assert {r.label for r in result} == {"pdf-processing", "spreadsheet"}
+    assert {r.reason.split(":")[0] for r in result} == {"pdf-processing", "spreadsheet"}
     assert mock_agent.call_count == 2
     # A fresh judge per skill: a reused Agent would carry the first verdict into the second
     # prompt as conversation history and resend the trajectory on top of it.
@@ -182,7 +201,7 @@ def test_invocation_with_no_catalog_is_still_judged(mock_agent_class):
 
     result = SkillSelectionAccuracyEvaluator().evaluate(case)
 
-    assert [r.label for r in result] == ["pdf-processing"]
+    assert [r.reason for r in result] == ["pdf-processing: fits"]
     assert mock_agent.call_count == 1
 
 
@@ -203,14 +222,14 @@ def test_refused_load_is_judged_as_a_selection_not_an_abstention(mock_agent_clas
 
     result = SkillSelectionAccuracyEvaluator().evaluate(case)
 
-    assert [r.label for r in result] == ["pdf-processing"]
-    assert "abstained" not in {r.label for r in result}
+    assert [r.reason for r in result] == ["pdf-processing: right skill"]
+    assert result[0].label == "Yes"
     assert "harness refused the load" in mock_agent.call_args.args[0]
 
 
 @patch(_MODULE)
 def test_evaluate_abstention_single_row(mock_agent_class):
-    # No skill invoked: one row judging the abstention, labeled "abstained".
+    # No skill invoked: one row judging the abstention, named as such in `reason`.
     mock_agent = Mock()
     mock_result = Mock()
     mock_result.structured_output = SkillSelectionRating(reasoning="none fit", score=SkillSelectionScore.YES)
@@ -220,7 +239,8 @@ def test_evaluate_abstention_single_row(mock_agent_class):
     result = SkillSelectionAccuracyEvaluator().evaluate(_case(None))
     assert len(result) == 1
     assert result[0].score == 1.0
-    assert result[0].label == "abstained"
+    assert result[0].label == "Yes"
+    assert result[0].reason == "abstained: none fit"
     assert mock_agent.call_count == 1
 
 
@@ -239,7 +259,7 @@ async def test_evaluate_async_loops_per_skill(mock_agent_class):
 
     result = await SkillSelectionAccuracyEvaluator().evaluate_async(_case(["pdf-processing", "spreadsheet"]))
     assert len(result) == 2
-    assert {r.label for r in result} == {"pdf-processing", "spreadsheet"}
+    assert {r.reason.split(":")[0] for r in result} == {"pdf-processing", "spreadsheet"}
     assert all(r.score == 1.0 for r in result)
     assert mock_agent_class.call_count == 2  # a fresh judge per skill, same as the sync path
 

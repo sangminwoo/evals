@@ -6,11 +6,9 @@ from strands import Agent
 from strands.models.model import Model
 
 from ..extractors.skills import InvokedSkill, extract_selected_skills, serialize_trajectory
-from ..types.evaluation import EvaluationData, EvaluationOutput, InputT, OutputT
+from ..types.evaluation import NOT_APPLICABLE, EvaluationData, EvaluationOutput, InputT, OutputT
 from .evaluator import Evaluator
 from .prompt_templates.skill_instruction_following import get_template
-
-_NOT_APPLICABLE = "not_applicable"
 
 
 class SkillFollowingScore(str, Enum):
@@ -113,21 +111,8 @@ class SkillInstructionFollowingEvaluator(Evaluator[InputT, OutputT]):
         # Drop not-applicable rows from the aggregate so no-skill runs don't deflate the mean.
         self.aggregator = self._aggregate_dropping_na
 
-    @staticmethod
-    def _aggregate_dropping_na(outputs: list[EvaluationOutput]) -> tuple[float, bool, str]:
-        scored = [o for o in outputs if o.label != _NOT_APPLICABLE]
-        if not scored:
-            reason = " | ".join(o.reason for o in outputs if o.reason) or "not applicable"
-            # Carry the rows' own verdicts: "nothing to follow" passes, but absent data fails.
-            all_pass = all(o.test_pass for o in outputs) if outputs else True
-            return (0.0, all_pass, reason)
-        avg = sum(o.score for o in scored) / len(scored)
-        all_pass = all(o.test_pass for o in scored)
-        reason = " | ".join(o.reason for o in scored if o.reason)
-        return avg, all_pass, reason
-
     def _not_applicable_row(self, reason: str, test_pass: bool = True) -> EvaluationOutput:
-        return EvaluationOutput(score=0.0, test_pass=test_pass, reason=reason, label=_NOT_APPLICABLE)
+        return EvaluationOutput(score=0.0, test_pass=test_pass, reason=reason, label=NOT_APPLICABLE)
 
     def _missing_trajectory_row(self) -> EvaluationOutput:
         """A missing trajectory is absent data, not a run that had nothing to follow."""

@@ -30,7 +30,17 @@ class EvaluationReport(BaseModel):
     recommendations: list[str | None] = []
 
     @staticmethod
+    def is_applicable(outputs: list[EvaluationOutput]) -> bool:
+        """Whether a case's rows carry a verdict, so its score belongs in an average.
+
+        A case is dropped only when every row it produced was not-applicable. One judged row is
+        enough to make the case's score a real number.
+        """
+        return not outputs or any(not output.not_applicable for output in outputs)
+
+    @classmethod
     def calculate_overall_score(
+        cls,
         scores: list[float],
         detailed_results: list[list[EvaluationOutput]],
     ) -> float:
@@ -38,9 +48,7 @@ class EvaluationReport(BaseModel):
         applicable_scores = [
             score
             for index, score in enumerate(scores)
-            if index >= len(detailed_results)
-            or not detailed_results[index]
-            or any(output.label != "not_applicable" for output in detailed_results[index])
+            if index >= len(detailed_results) or cls.is_applicable(detailed_results[index])
         ]
         return sum(applicable_scores) / len(applicable_scores) if applicable_scores else 0.0
 

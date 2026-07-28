@@ -6,11 +6,11 @@ from strands import Agent
 from strands.models.model import Model
 
 from ..extractors.skills import InvokedSkill, extract_selected_skills, parse_available_skills, serialize_trajectory
-from ..types.evaluation import EvaluationData, EvaluationOutput, InputT, OutputT
+from ..types.evaluation import NOT_APPLICABLE, EvaluationData, EvaluationOutput, InputT, OutputT
 from .evaluator import Evaluator
 from .prompt_templates.skill_selection_accuracy import get_template
 
-_NOT_APPLICABLE = "not_applicable"
+_ABSTAINED = "abstained"
 
 
 class SkillSelectionScore(str, Enum):
@@ -50,6 +50,9 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
         self.system_prompt = system_prompt if system_prompt is not None else get_template(version).SYSTEM_PROMPT
         self.version = version
         self.model = model
+        # A case with nothing to select from contributes a placeholder 0.0 row; averaging it in
+        # would report a run that had no decision to make as a failed one.
+        self.aggregator = self._aggregate_dropping_na
 
     def _available_str(self, evaluation_case: EvaluationData[InputT, OutputT]) -> str:
         available = parse_available_skills(evaluation_case.actual_trajectory)
@@ -96,13 +99,20 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
         """Prompt judging one focal decision: invoking `focus_skill`, or abstaining if None."""
         return self._prompt_for(self._case_context(evaluation_case), focus_skill)
 
-    def _rating_to_output(self, rating: SkillSelectionRating, label: str) -> EvaluationOutput:
+    def _rating_to_output(self, rating: SkillSelectionRating, decision: str) -> EvaluationOutput:
+        """One row for one decision.
+
+        `label` carries the judge's rating, as every other judge in the framework does, so a
+        consumer reading labels across evaluators sees verdicts rather than a mix of verdicts and
+        skill names. Which decision the row is about is named in `reason` instead, since a case
+        with several invoked skills produces several rows.
+        """
         normalized_score = self._score_mapping[rating.score]
         return EvaluationOutput(
             score=normalized_score,
             test_pass=normalized_score == 1.0,
-            reason=rating.reasoning,
-            label=label,
+            reason=f"{decision}: {rating.reasoning}",
+            label=rating.score.value,
         )
 
     def _new_judge(self) -> Agent:
@@ -124,7 +134,7 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
 
     @staticmethod
     def _not_applicable_row(reason: str, test_pass: bool) -> EvaluationOutput:
-        return EvaluationOutput(score=0.0, test_pass=test_pass, reason=reason, label=_NOT_APPLICABLE)
+        return EvaluationOutput(score=0.0, test_pass=test_pass, reason=reason, label=NOT_APPLICABLE)
 
     @classmethod
     def _missing_trajectory_row(cls) -> EvaluationOutput:
@@ -151,11 +161,11 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
         context = self._case_context(evaluation_case)
         if not invoked:
             rating = self._judge(self._prompt_for(context, None))
-            return [self._rating_to_output(rating, label="abstained")]
+            return [self._rating_to_output(rating, decision=_ABSTAINED)]
         results = []
         for skill in invoked:
             rating = self._judge(self._prompt_for(context, skill))
-            results.append(self._rating_to_output(rating, label=skill.name))
+            results.append(self._rating_to_output(rating, decision=skill.name))
         return results
 
     async def evaluate_async(self, evaluation_case: EvaluationData[InputT, OutputT]) -> list[EvaluationOutput]:
@@ -167,9 +177,9 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
         context = self._case_context(evaluation_case)
         if not invoked:
             rating = await self._judge_async(self._prompt_for(context, None))
-            return [self._rating_to_output(rating, label="abstained")]
+            return [self._rating_to_output(rating, decision=_ABSTAINED)]
         results = []
         for skill in invoked:
             rating = await self._judge_async(self._prompt_for(context, skill))
-            results.append(self._rating_to_output(rating, label=skill.name))
+            results.append(self._rating_to_output(rating, decision=skill.name))
         return results
