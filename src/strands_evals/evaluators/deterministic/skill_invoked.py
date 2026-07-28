@@ -15,13 +15,24 @@ class SkillInvoked(Evaluator[InputT, OutputT]):
         if trajectory is None:
             return [EvaluationOutput(score=0.0, test_pass=False, reason="no trajectory provided")]
 
-        invoked_names = {s.name for s in extract_selected_skills(trajectory)}
-        found = self.skill_name in invoked_names
+        selected = extract_selected_skills(trajectory)
+        # A refused load does not count as invoked: the agent never received the skill, so an
+        # assertion that it was used is false. It is reported separately from no attempt at all,
+        # since the two call for different fixes (a broken harness, or a prompt that never
+        # surfaced the skill).
+        found = self.skill_name in {s.name for s in selected if s.status == "loaded"}
+        refused = self.skill_name in {s.name for s in selected if s.status == "failed"}
+        if found:
+            reason = f"skill '{self.skill_name}' was invoked"
+        elif refused:
+            reason = f"skill '{self.skill_name}' was requested but the load failed"
+        else:
+            reason = f"skill '{self.skill_name}' was not invoked"
         return [
             EvaluationOutput(
                 score=1.0 if found else 0.0,
                 test_pass=found,
-                reason=f"skill '{self.skill_name}' {'was invoked' if found else 'was not invoked'}",
+                reason=reason,
             )
         ]
 

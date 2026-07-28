@@ -284,6 +284,35 @@ def test_invoked_skill_without_body_is_not_mislabeled_as_no_invocation(mock_agen
 
 
 @patch(_MODULE)
+def test_refused_load_reports_why_nothing_could_be_followed(mock_agent_class):
+    """The harness refused the load, so the agent never received any instructions.
+
+    Reported separately from a missing body: both are not-applicable, but conflating them hides
+    a broken harness behind what reads as a trajectory-capture gap.
+    """
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "t", "name": "skills", "input": {"skill_name": "pdf-processing"}}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"toolResult": {"toolUseId": "t", "status": "error", "content": [{"text": "skill not found"}]}}
+            ],
+        },
+    ]
+    case = EvaluationData(input="do pdf", actual_output="done", actual_trajectory=messages)
+
+    result = SkillInstructionFollowingEvaluator().evaluate(case)
+
+    assert len(result) == 1
+    assert result[0].label == "not_applicable"
+    assert result[0].reason == "pdf-processing: the harness refused the load, so no instructions were received"
+    mock_agent_class.assert_not_called()
+
+
+@patch(_MODULE)
 def test_duplicate_loads_trigger_one_judge_call(mock_agent_class):
     mock_agent = Mock()
     mock_result = Mock()

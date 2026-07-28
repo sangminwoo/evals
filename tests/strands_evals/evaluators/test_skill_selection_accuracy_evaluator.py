@@ -7,6 +7,7 @@ from strands_evals.evaluators.skill_selection_accuracy_evaluator import (
     SkillSelectionRating,
     SkillSelectionScore,
 )
+from strands_evals.extractors import InvokedSkill
 from strands_evals.types.evaluation import EvaluationData
 
 _MODULE = "strands_evals.evaluators.skill_selection_accuracy_evaluator.Agent"
@@ -45,11 +46,29 @@ def test_init_defaults():
 
 def test_prompt_focuses_on_one_invoked_skill():
     ev = SkillSelectionAccuracyEvaluator()
-    prompt = ev._build_prompt(_case("pdf-processing"), focus_skill="pdf-processing")
+    prompt = ev._build_prompt(_case("pdf-processing"), focus_skill=InvokedSkill("pdf-processing", "# body"))
     assert "pdf-processing: Extract text from PDFs." in prompt  # available list
     assert "invoked the skill: pdf-processing" in prompt  # focal decision
     assert "Agent trajectory" in prompt
     assert "report.pdf" in prompt
+
+
+def test_prompt_tells_the_judge_a_refused_load_is_not_a_wrong_choice():
+    """Selection is about the choice, not the outcome.
+
+    Left unsaid, the judge sees the harness error in the trajectory and scores a correct
+    selection as wrong for failing to load.
+    """
+    ev = SkillSelectionAccuracyEvaluator()
+
+    prompt = ev._build_prompt(
+        _case("pdf-processing"),
+        focus_skill=InvokedSkill("pdf-processing", None, status="failed"),
+    )
+
+    assert "invoked the skill: pdf-processing" in prompt
+    assert "harness refused the load" in prompt
+    assert "not whether it worked" in prompt
 
 
 def test_prompt_abstention_mode():
@@ -165,6 +184,28 @@ def test_invocation_with_no_catalog_is_still_judged(mock_agent_class):
 
     assert [r.label for r in result] == ["pdf-processing"]
     assert mock_agent.call_count == 1
+
+
+@patch(_MODULE)
+def test_refused_load_is_judged_as_a_selection_not_an_abstention(mock_agent_class):
+    """A skill the harness refused is still a selection the agent made.
+
+    Dropping the row would leave the run looking like an abstention, so an agent that picked the
+    right skill and was refused would be scored on a decision it never took.
+    """
+    mock_agent = Mock()
+    mock_result = Mock()
+    mock_result.structured_output = SkillSelectionRating(reasoning="right skill", score=SkillSelectionScore.YES)
+    mock_agent.return_value = mock_result
+    mock_agent_class.return_value = mock_agent
+    case = _case("pdf-processing")
+    case.actual_trajectory[-1]["content"][0]["toolResult"]["status"] = "error"
+
+    result = SkillSelectionAccuracyEvaluator().evaluate(case)
+
+    assert [r.label for r in result] == ["pdf-processing"]
+    assert "abstained" not in {r.label for r in result}
+    assert "harness refused the load" in mock_agent.call_args.args[0]
 
 
 @patch(_MODULE)

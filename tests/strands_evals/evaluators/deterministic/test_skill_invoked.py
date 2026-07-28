@@ -38,6 +38,30 @@ def test_skill_invoked_no_skill():
     assert result[0].test_pass is False
 
 
+def test_refused_load_does_not_count_as_invoked():
+    """The agent asked for the skill and the harness refused, so it was never used."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "t", "name": "skills", "input": {"skill_name": "pdf-processing"}}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"toolResult": {"toolUseId": "t", "status": "error", "content": [{"text": "skill not found"}]}}
+            ],
+        },
+    ]
+    case = EvaluationData(input="do pdf", actual_output="done", actual_trajectory=messages)
+
+    result = SkillInvoked(skill_name="pdf-processing").evaluate(case)
+
+    assert result[0].score == 0.0
+    assert result[0].test_pass is False
+    # Distinguished from never reaching for the skill, which needs a different fix.
+    assert result[0].reason == "skill 'pdf-processing' was requested but the load failed"
+
+
 def test_skill_invoked_no_trajectory():
     case = EvaluationData(input="x", actual_output="y", actual_trajectory=None)
     result = SkillInvoked(skill_name="pdf-processing").evaluate(case)

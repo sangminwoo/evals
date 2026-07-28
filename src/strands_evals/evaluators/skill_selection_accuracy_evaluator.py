@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from strands import Agent
 from strands.models.model import Model
 
-from ..extractors.skills import extract_selected_skills, parse_available_skills, serialize_trajectory
+from ..extractors.skills import InvokedSkill, extract_selected_skills, parse_available_skills, serialize_trajectory
 from ..types.evaluation import EvaluationData, EvaluationOutput, InputT, OutputT
 from .evaluator import Evaluator
 from .prompt_templates.skill_selection_accuracy import get_template
@@ -72,19 +72,26 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
         return head, tail
 
     @staticmethod
-    def _prompt_for(context: tuple[str, str], focus_skill: str | None) -> str:
+    def _prompt_for(context: tuple[str, str], focus_skill: InvokedSkill | None) -> str:
         """Prompt judging one focal decision: invoking `focus_skill`, or abstaining if None."""
         head, tail = context
-        if focus_skill is not None:
-            decision = f"## Decision under evaluation\nThe agent invoked the skill: {focus_skill}\n"
-        else:
+        if focus_skill is None:
             decision = "## Decision under evaluation\nThe agent invoked no skill (abstained).\n"
+        else:
+            decision = f"## Decision under evaluation\nThe agent invoked the skill: {focus_skill.name}\n"
+            if focus_skill.status == "failed":
+                # What is being judged is the choice, not the outcome. Without this the judge sees
+                # an error in the trajectory and marks a correct selection wrong for failing.
+                decision += (
+                    "The harness refused the load, so the agent never received the skill. "
+                    "Judge whether asking for this skill was the right choice, not whether it worked.\n"
+                )
         return f"{head}{decision}\n{tail}"
 
     def _build_prompt(
         self,
         evaluation_case: EvaluationData[InputT, OutputT],
-        focus_skill: str | None,
+        focus_skill: InvokedSkill | None,
     ) -> str:
         """Prompt judging one focal decision: invoking `focus_skill`, or abstaining if None."""
         return self._prompt_for(self._case_context(evaluation_case), focus_skill)
@@ -147,7 +154,7 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
             return [self._rating_to_output(rating, label="abstained")]
         results = []
         for skill in invoked:
-            rating = self._judge(self._prompt_for(context, skill.name))
+            rating = self._judge(self._prompt_for(context, skill))
             results.append(self._rating_to_output(rating, label=skill.name))
         return results
 
@@ -163,6 +170,6 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
             return [self._rating_to_output(rating, label="abstained")]
         results = []
         for skill in invoked:
-            rating = await self._judge_async(self._prompt_for(context, skill.name))
+            rating = await self._judge_async(self._prompt_for(context, skill))
             results.append(self._rating_to_output(rating, label=skill.name))
         return results

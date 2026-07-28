@@ -6,6 +6,7 @@ import pytest
 
 from strands_evals.extractors import (
     AvailableSkill,
+    InvokedSkill,
     extract_selected_skills,
     parse_available_skills,
     serialize_trajectory,
@@ -26,6 +27,17 @@ from strands_evals.types.trace import (
 )
 
 from . import skill_fixtures as fx
+
+
+def _loaded(name: str, body: str | None) -> InvokedSkill:
+    """A skill the harness loaded successfully, for comparing whole extraction results."""
+    return InvokedSkill(name, body)
+
+
+def _failed(name: str) -> InvokedSkill:
+    """A skill the agent asked for and the harness refused."""
+    return InvokedSkill(name, None, status="failed")
+
 
 # ---- raw message-list path --------------------------------------------------
 
@@ -247,11 +259,17 @@ def test_user_skills_json_is_not_treated_as_available_catalog():
     assert parse_available_skills(messages) == []
 
 
-def test_failed_load_is_not_an_invocation():
-    assert extract_selected_skills(fx.FAILED_LOAD_MESSAGES) == []
+def test_failed_load_is_recorded_as_a_failed_attempt():
+    """A refused load is a selection the agent made, so it must not read as an abstention.
+
+    The body is dropped (there is none), but the name stays: an agent that asked for the right
+    skill and was refused by the harness selected correctly, and dropping the row entirely makes
+    that run indistinguishable from one where the agent never reached for a skill at all.
+    """
+    assert extract_selected_skills(fx.FAILED_LOAD_MESSAGES) == [_failed("pdf-processing")]
 
 
-def test_nested_failed_load_is_not_an_invocation():
+def test_nested_failed_load_is_recorded_as_a_failed_attempt():
     messages = [
         {
             "name": "load_skill",
@@ -265,7 +283,7 @@ def test_nested_failed_load_is_not_an_invocation():
         },
     ]
 
-    assert extract_selected_skills(messages) == []
+    assert extract_selected_skills(messages) == [_failed("pdf-processing")]
 
 
 def test_string_zero_exit_code_is_successful():
@@ -282,16 +300,16 @@ def test_string_zero_exit_code_is_successful():
         }
     ]
 
-    assert extract_selected_skills(messages) == [("pdf-processing", fx.SKILL_BODY)]
+    assert extract_selected_skills(messages) == [_loaded("pdf-processing", fx.SKILL_BODY)]
 
 
 def test_successful_load_without_body_preserves_invocation():
-    assert extract_selected_skills(fx.BODY_MISSING_MESSAGES) == [("pdf-processing", None)]
+    assert extract_selected_skills(fx.BODY_MISSING_MESSAGES) == [_loaded("pdf-processing", None)]
 
 
 def test_duplicate_loads_are_coalesced():
     invoked = extract_selected_skills(fx.DUPLICATE_LOAD_MESSAGES)
-    assert invoked == [("pdf-processing", fx.SKILL_BODY)]
+    assert invoked == [_loaded("pdf-processing", fx.SKILL_BODY)]
 
 
 def test_selected_skills_from_typed_messages():
@@ -318,7 +336,7 @@ def test_selected_skills_from_typed_messages():
 
     invoked = extract_selected_skills(messages)
 
-    assert invoked == [("pdf-processing", fx.SKILL_BODY)]
+    assert invoked == [_loaded("pdf-processing", fx.SKILL_BODY)]
 
 
 def test_unsupported_trajectory_type_returns_empty():
@@ -378,11 +396,22 @@ def test_session_non_skill_tool_ignored():
     assert extract_selected_skills(_session([tool_span])) == []
 
 
-def test_session_failed_skill_load_ignored():
+def test_session_failed_skill_load_is_recorded_as_a_failed_attempt():
     tool_span = ToolExecutionSpan(
         span_info=_span_info(),
         tool_call=ToolCall(name="skills", arguments={"skill_name": "pdf-processing"}, tool_call_id="tu-1"),
         tool_result=ToolResult(content="skill not found", error="error"),
+    )
+    assert extract_selected_skills(_session([tool_span])) == [_failed("pdf-processing")]
+
+
+def test_session_failed_read_of_a_skill_file_is_not_an_invocation():
+    """A read of a `SKILL.md` that errored recovered no name and no body, so there is nothing
+    to report: unlike a reserved skill tool, the path read carries no declared skill name."""
+    tool_span = ToolExecutionSpan(
+        span_info=_span_info(),
+        tool_call=ToolCall(name="read_file", arguments={"path": "/skills/pdf/SKILL.md"}, tool_call_id="r-1"),
+        tool_result=ToolResult(content="No such file", error="error"),
     )
     assert extract_selected_skills(_session([tool_span])) == []
 
@@ -397,7 +426,7 @@ def test_session_skill_file_read_with_body():
         ),
         tool_result=ToolResult(content=fx.SKILL_BODY),
     )
-    assert extract_selected_skills(_session([tool_span])) == [("pdf-processing", fx.SKILL_BODY)]
+    assert extract_selected_skills(_session([tool_span])) == [_loaded("pdf-processing", fx.SKILL_BODY)]
 
 
 def test_session_skill_file_read_uses_frontmatter_name():
@@ -412,7 +441,7 @@ def test_session_skill_file_read_uses_frontmatter_name():
         tool_result=ToolResult(content=body),
     )
 
-    assert extract_selected_skills(_session([tool_span])) == [("canonical-skill", body)]
+    assert extract_selected_skills(_session([tool_span])) == [_loaded("canonical-skill", body)]
 
 
 def test_opaque_load_and_alias_path_read_are_coalesced():
@@ -452,7 +481,7 @@ def test_opaque_load_and_alias_path_read_are_coalesced():
         },
     ]
 
-    assert extract_selected_skills(messages) == [("canonical-skill", body)]
+    assert extract_selected_skills(messages) == [_loaded("canonical-skill", body)]
 
 
 def test_command_execution_skill_read_uses_frontmatter_name():
@@ -470,7 +499,7 @@ def test_command_execution_skill_read_uses_frontmatter_name():
         }
     ]
 
-    assert extract_selected_skills(messages) == [("canonical-skill", body)]
+    assert extract_selected_skills(messages) == [_loaded("canonical-skill", body)]
 
 
 def _shell_command(command: str, output: str = "col1,col2\n1,2", exit_code: int = 0):
@@ -524,14 +553,14 @@ def test_shell_command_that_does_not_read_a_skill_is_not_an_invocation(command):
 def test_shell_read_of_a_skill_is_an_invocation(command):
     body = "# PDF Processing\n1. Identify the path.\n2. Extract."
 
-    assert extract_selected_skills(_shell_command(command, output=body)) == [("pdf-processing", body)]
+    assert extract_selected_skills(_shell_command(command, output=body)) == [_loaded("pdf-processing", body)]
 
 
 @pytest.mark.parametrize(
     "command,expected",
     [
         ("cat data.csv > /skills/my-new-skill/SKILL.md", []),
-        ("cat /skills/pdf-processing/SKILL.md", [("pdf-processing", "# PDF Processing\n1. Extract.")]),
+        ("cat /skills/pdf-processing/SKILL.md", [_loaded("pdf-processing", "# PDF Processing\n1. Extract.")]),
     ],
 )
 def test_shell_tool_read_uses_the_same_rule_as_command_execution(command, expected):
@@ -558,7 +587,7 @@ def test_sigpipe_exit_code_does_not_discard_a_read_body():
         _shell_command("cat /skills/pdf-processing/SKILL.md | head -20", output=body, exit_code=141)
     )
 
-    assert invoked == [("pdf-processing", body)]
+    assert invoked == [_loaded("pdf-processing", body)]
 
 
 def test_failing_read_is_still_discarded():
@@ -583,7 +612,7 @@ def test_malformed_frontmatter_body_falls_back_to_path_name():
         }
     ]
 
-    assert extract_selected_skills(messages) == [("directory-alias", body)]
+    assert extract_selected_skills(messages) == [_loaded("directory-alias", body)]
 
 
 def test_unkeyed_results_are_not_reused_across_skill_calls():
@@ -595,8 +624,8 @@ def test_unkeyed_results_are_not_reused_across_skill_calls():
     ]
 
     assert extract_selected_skills(messages) == [
-        ("first", "first body"),
-        ("second", "second body"),
+        _loaded("first", "first body"),
+        _loaded("second", "second body"),
     ]
 
 
@@ -835,3 +864,123 @@ def test_longer_unrelated_output_does_not_displace_a_recovered_body():
 
     assert len(invoked) == 1
     assert invoked[0].body == real_body
+
+
+def _claude_launch(call_id: str, skill: str) -> list[dict]:
+    """A Claude Code `Skill` call and the launch acknowledgement that carries no body."""
+    return [
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": call_id, "name": "Skill", "input": {"skill": skill}}],
+            },
+        },
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": call_id, "content": f"Launching skill: {skill}"}],
+            },
+        },
+    ]
+
+
+def _claude_injected_body(skill: str, body: str) -> dict:
+    return {"role": "user", "content": f"Base directory for this skill: /skills/{skill}\n\n{body}"}
+
+
+def test_parallel_claude_skill_calls_each_get_their_own_body():
+    """Claude Code can launch several skills in one turn; each must get its own instructions.
+
+    Taking the first injected body after the call index gives every skill the first skill's
+    steps, and the adherence judge then scores the agent against instructions it never received.
+    """
+    messages = [
+        *_claude_launch("cc-1", "pdf-processing"),
+        *_claude_launch("cc-2", "spreadsheet-analysis"),
+        _claude_injected_body("spreadsheet-analysis", "# Spreadsheet\n1. Open the sheet."),
+        _claude_injected_body("pdf-processing", "# PDF\n1. Extract the text."),
+    ]
+
+    invoked = extract_selected_skills(messages)
+
+    assert [s.name for s in invoked] == ["pdf-processing", "spreadsheet-analysis"]
+    assert "1. Extract the text." in (invoked[0].body or "")
+    assert "1. Open the sheet." in (invoked[1].body or "")
+
+
+def test_single_claude_body_is_used_even_when_the_directory_is_an_alias():
+    """One launch and one injected body pair up, since the directory can differ from the name."""
+    messages = [
+        *_claude_launch("cc-1", "pdf-processing"),
+        _claude_injected_body("directory-alias", "# PDF\n1. Extract the text."),
+    ]
+
+    invoked = extract_selected_skills(messages)
+
+    assert [s.name for s in invoked] == ["pdf-processing"]
+    assert "1. Extract the text." in (invoked[0].body or "")
+
+
+def _load_attempt(call_id: str, skill: str, result: dict) -> list[dict]:
+    return [
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": call_id, "name": "load_skill", "input": {"skill_name": skill}}}],
+        },
+        {"role": "user", "content": [{"toolResult": {"toolUseId": call_id, **result}}]},
+    ]
+
+
+_REFUSED = {"status": "error", "content": [{"text": "skill not found"}]}
+_LOADED_OPAQUE = {"content": [{"text": '{"status": "loaded", "path": ".agents/pdf-processing"}'}]}
+
+
+def test_retry_after_a_refused_load_is_reported_as_loaded():
+    """One success anywhere in the run means the agent got the skill.
+
+    The retry here returns no body, so a merge that only compares body length would leave the
+    first attempt's refusal in place and report a skill the agent did receive as failed.
+    """
+    messages = [
+        *_load_attempt("1", "pdf-processing", _REFUSED),
+        *_load_attempt("2", "pdf-processing", _LOADED_OPAQUE),
+    ]
+
+    assert extract_selected_skills(messages) == [_loaded("pdf-processing", None)]
+
+
+def test_skill_refused_on_every_attempt_stays_failed():
+    messages = [
+        *_load_attempt("1", "pdf-processing", _REFUSED),
+        *_load_attempt("2", "pdf-processing", _REFUSED),
+    ]
+
+    assert extract_selected_skills(messages) == [_failed("pdf-processing")]
+
+
+def test_a_later_refusal_does_not_discard_a_recovered_body():
+    """The agent already had the instructions; a failed re-load does not take them away."""
+    body = "# PDF\n1. Extract the text."
+    messages = [
+        *_load_attempt("1", "pdf-processing", {"content": [{"text": body}]}),
+        *_load_attempt("2", "pdf-processing", _REFUSED),
+    ]
+
+    assert extract_selected_skills(messages) == [_loaded("pdf-processing", body)]
+
+
+def test_unkeyed_result_of_an_unrelated_tool_is_not_taken_as_the_skill_body():
+    """An unkeyed result only pairs with the call it follows, not the next unclaimed one.
+
+    Here the skill call's own result is missing and a later tool's is not; pairing across the
+    intervening call attributes that tool's output to the skill as its instructions.
+    """
+    messages = [
+        {"tool_name": "activate_skill", "parameters": {"name": "pdf-processing"}},
+        {"tool_name": "get_weather", "parameters": {"city": "Paris"}},
+        {"type": "tool_result", "status": "success", "llmContent": "Weather in Paris: 21C"},
+    ]
+
+    assert extract_selected_skills(messages) == [_loaded("pdf-processing", None)]

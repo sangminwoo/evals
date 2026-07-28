@@ -18,7 +18,7 @@ import html
 import json
 import logging
 import re
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 import yaml
 from pydantic import BaseModel
@@ -44,10 +44,15 @@ class AvailableSkill(NamedTuple):
 
 
 class InvokedSkill(NamedTuple):
-    """A skill the agent actually loaded during the run."""
+    """A skill the agent selected during the run, whether or not the load succeeded."""
 
     name: str
     body: str | None  # SKILL.md text if captured from the trajectory, else None
+    # "failed" means the harness refused the load (unknown skill, sandbox error). Kept rather than
+    # dropped because a refused load and no attempt at all are different runs: the agent that asked
+    # for the right skill and was refused made a correct selection, and reporting it as an
+    # abstention credits or blames the wrong decision.
+    status: Literal["loaded", "failed"] = "loaded"
 
 
 # Reserved skill-tool name -> the input-argument key that holds the skill name.
@@ -59,6 +64,9 @@ _HARNESS_TOOLS: dict[str, str] = {
     "activate_skill": "name",  # Gemini CLI
     "invoke_skill": "name",  # OpenHands
 }
+
+# Claude Code injects the skill body as a user message headed by the skill's directory.
+_CLAUDE_BASE_DIR = re.compile(r"Base directory for this skill:\s*(?P<path>\S+)", re.IGNORECASE)
 
 # The available-skills block the harness injects into the system prompt.
 _AVAILABLE_BLOCK = re.compile(r"<available_skills>(.*?)</available_skills>", re.DOTALL | re.IGNORECASE)
@@ -207,15 +215,19 @@ def _selected_from_session(session: Session) -> list[InvokedSkill]:
         for span in trace.spans:
             if not isinstance(span, ToolExecutionSpan):
                 continue
-            if span.tool_result.error:
-                continue
+            failed = bool(span.tool_result.error)
             skill_name = _skill_name_from_args(span.tool_call.name, span.tool_call.arguments)
-            body = _body_from_result(span.tool_result.content)
             if skill_name is not None:
-                out.append(InvokedSkill(name=skill_name, body=body))
+                if failed:
+                    out.append(InvokedSkill(name=skill_name, body=None, status="failed"))
+                else:
+                    out.append(InvokedSkill(name=skill_name, body=_body_from_result(span.tool_result.content)))
                 continue
 
+            if failed:
+                continue
             read_path = _skill_read_path(span.tool_call.name, span.tool_call.arguments)
+            body = _body_from_result(span.tool_result.content)
             if read_path and body:
                 out.append(InvokedSkill(name=_skill_name_from_body(body, read_path), body=body))
     return _deduplicate_invocations(out)
@@ -305,6 +317,11 @@ def _body_from_result(result: Any) -> str | None:
             if decoded != result:
                 return _body_from_result(decoded)
     return text
+
+
+def _last_path_segment(path: str) -> str:
+    """The final component of a directory path, with separators normalized."""
+    return path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
 
 
 def _skill_name_from_path(path: str) -> str:
@@ -406,6 +423,13 @@ def _deduplicate_invocations(invocations: list[InvokedSkill]) -> list[InvokedSki
         if index is None:
             index_by_key[key] = len(out)
             out.append(invocation)
+            continue
+        # One success anywhere in the run means the agent got the skill, so a retry after a
+        # refusal is reported as loaded. Only an all-refused skill stays failed.
+        if out[index].status == "failed" and invocation.status == "loaded":
+            out[index] = invocation
+            continue
+        if invocation.status == "failed":
             continue
         # Prefer the fullest body, and with it the name that body declares. A later read only
         # wins when it contains what was already recovered, which is what a re-read of the
@@ -719,15 +743,32 @@ def _tool_call(block: dict[str, Any]) -> tuple[str | None, str, dict[str, Any]] 
 def _claude_body_after(
     indexed_blocks: list[tuple[int, str | None, dict[str, Any]]],
     call_index: int,
+    skill_name: str,
 ) -> str | None:
-    """Find Claude Code's injected skill body after its launch acknowledgement."""
+    """Find Claude Code's injected skill body after its launch acknowledgement.
+
+    The body is matched to the call by the skill directory named on the `Base directory` line,
+    not by position: Claude Code can launch several skills in one assistant turn, and then the
+    injected bodies arrive in an order the call order does not fix. Taking the first block after
+    the call gives every skill in the turn the first skill's instructions, which the adherence
+    judge would then score against the wrong steps.
+    """
+    candidates: list[tuple[str, str]] = []  # (base directory, full injected text)
     for index, role, block in indexed_blocks:
         if index <= call_index or role not in (None, "user"):
             continue
         text = _content_text(block.get("text") if block.get("type") == "text" else block)
-        if text.lstrip().startswith("Base directory for this skill:"):
+        if match := _CLAUDE_BASE_DIR.match(text.lstrip()):
+            candidates.append((_last_path_segment(match.group("path")), text))
+
+    wanted = _canonical_skill_key(skill_name)
+    for directory, text in candidates:
+        if _canonical_skill_key(directory) == wanted:
             return text
-    return None
+    # No directory matched. With one candidate that is still this call's body, since the directory
+    # can be an alias for the name in the frontmatter. With several it is unknowable which belongs
+    # to this call, and guessing would attribute another skill's instructions to it.
+    return candidates[0][1] if len(candidates) == 1 else None
 
 
 def _selected_from_list(messages: list[Any]) -> list[InvokedSkill]:
@@ -750,6 +791,12 @@ def _selected_from_list(messages: list[Any]) -> list[InvokedSkill]:
         else:
             unkeyed_results.append((result_index, parsed_result[1], parsed_result[2]))
 
+    # Every tool call's position, so an unkeyed result is only paired with the call it follows
+    # directly. Without that bound the next unclaimed result wins, and an unrelated tool's output
+    # in between is attributed to the skill: the adherence judge then scores the agent against a
+    # weather report instead of the skill's steps.
+    call_indices = sorted({index for index, _, block in indexed_blocks if _tool_call(block) is not None})
+
     out: list[InvokedSkill] = []
     used_unkeyed_results: set[int] = set()
     for message_index, _, block in indexed_blocks:
@@ -766,11 +813,13 @@ def _selected_from_list(messages: list[Any]) -> list[InvokedSkill]:
         call_id, tool_name, arguments = call
         matched_result = results_by_id.get(call_id) if call_id is not None else None
         if matched_result is None and call_id is None:
+            next_call_index = next((index for index in call_indices if index > message_index), None)
             unkeyed_match = next(
                 (
                     (index, failed, body)
                     for index, failed, body in unkeyed_results
-                    if index > message_index and index not in used_unkeyed_results
+                    if message_index < index and index not in used_unkeyed_results
+                    if next_call_index is None or index < next_call_index
                 ),
                 None,
             )
@@ -780,11 +829,12 @@ def _selected_from_list(messages: list[Any]) -> list[InvokedSkill]:
 
         skill_name = _skill_name_from_args(tool_name, arguments)
         if skill_name is not None:
-            if matched_result is None or matched_result[0]:
+            if matched_result is not None and matched_result[0]:
+                out.append(InvokedSkill(skill_name, None, status="failed"))
                 continue
-            body = matched_result[1]
+            body = matched_result[1] if matched_result is not None else None
             if tool_name == "Skill" and body is None:
-                body = _claude_body_after(indexed_blocks, message_index)
+                body = _claude_body_after(indexed_blocks, message_index, skill_name)
             out.append(InvokedSkill(skill_name, body))
             continue
 

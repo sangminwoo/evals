@@ -133,6 +133,20 @@ class SkillInstructionFollowingEvaluator(Evaluator[InputT, OutputT]):
         """A missing trajectory is absent data, not a run that had nothing to follow."""
         return self._not_applicable_row("no trajectory provided", test_pass=False)
 
+    @staticmethod
+    def _unscorable_reason(skill: InvokedSkill) -> str | None:
+        """Why this skill cannot be scored for adherence, or None when it can be.
+
+        A refused load is reported separately from a missing body: the agent never received any
+        instructions, so there was nothing it could have followed. Both are not-applicable, but
+        conflating them hides a broken harness behind what looks like a capture gap.
+        """
+        if skill.status == "failed":
+            return f"{skill.name}: the harness refused the load, so no instructions were received"
+        if not skill.body:
+            return f"{skill.name}: skill body unavailable"
+        return None
+
     def _build_prompt(self, skill: InvokedSkill, evaluation_case: EvaluationData[InputT, OutputT]) -> str:
         body = _strip_frontmatter(skill.body or "")
         return (
@@ -170,8 +184,8 @@ class SkillInstructionFollowingEvaluator(Evaluator[InputT, OutputT]):
             return [self._not_applicable_row("no skill invoked")]
         results = []
         for skill in invoked:
-            if not skill.body:
-                results.append(self._not_applicable_row(f"{skill.name}: skill body unavailable"))
+            if reason := self._unscorable_reason(skill):
+                results.append(self._not_applicable_row(reason))
                 continue
             prompt = self._build_prompt(skill, evaluation_case)
             evaluator_agent = Agent(model=self.model, system_prompt=self.system_prompt, callback_handler=None)
@@ -188,8 +202,8 @@ class SkillInstructionFollowingEvaluator(Evaluator[InputT, OutputT]):
             return [self._not_applicable_row("no skill invoked")]
         results = []
         for skill in invoked:
-            if not skill.body:
-                results.append(self._not_applicable_row(f"{skill.name}: skill body unavailable"))
+            if reason := self._unscorable_reason(skill):
+                results.append(self._not_applicable_row(reason))
                 continue
             prompt = self._build_prompt(skill, evaluation_case)
             evaluator_agent = Agent(model=self.model, system_prompt=self.system_prompt, callback_handler=None)
