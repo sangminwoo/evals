@@ -601,6 +601,61 @@ def test_load_acknowledgement_is_not_treated_as_a_body():
     assert invoked[0].body is None
 
 
+# The three strings the Strands AgentSkills plugin returns instead of a skill body. They arrive
+# marked successful, because `@tool` reports any plain string return as `status="success"`.
+_AGENT_SKILLS_NON_BODIES = [
+    "Skill 'pdf-processing' not found. Available skills: spreadsheet-analysis, docx-editing",
+    "Error: skill_name is required. Available skills: pdf-processing, spreadsheet-analysis",
+    "Skill 'pdf-processing' activated (no instructions available).",
+]
+
+
+@pytest.mark.parametrize("result_text", _AGENT_SKILLS_NON_BODIES)
+def test_agent_skills_status_string_is_not_a_body(result_text):
+    """A refused or empty load carries no instructions, so the judge must not be handed one."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "t1", "name": "skills", "input": {"skill_name": "pdf-processing"}}}],
+        },
+        {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": [{"text": result_text}]}}]},
+    ]
+
+    invoked = extract_selected_skills(messages)
+
+    assert [s.name for s in invoked] == ["pdf-processing"]
+    assert invoked[0].body is None
+
+
+@pytest.mark.parametrize("result_text", _AGENT_SKILLS_NON_BODIES)
+def test_agent_skills_status_string_is_not_a_body_on_the_session_path(result_text):
+    """Same on the Session path: the plugin's string lands in `content` with `error` unset."""
+    tool_span = ToolExecutionSpan(
+        span_info=_span_info(),
+        tool_call=ToolCall(name="skills", arguments={"skill_name": "pdf-processing"}, tool_call_id="tu-1"),
+        tool_result=ToolResult(content=result_text),
+    )
+
+    invoked = extract_selected_skills(_session([tool_span]))
+
+    assert [s.name for s in invoked] == ["pdf-processing"]
+    assert invoked[0].body is None
+
+
+def test_body_mentioning_a_missing_file_is_kept():
+    """The load-error filter matches a whole status line, not the words wherever they appear."""
+    body = "# PDF Processing\n\n1. If the skill file is not found, stop.\n2. Extract the text."
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "t1", "name": "skills", "input": {"skill_name": "pdf-processing"}}}],
+        },
+        {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": [{"text": body}]}}]},
+    ]
+
+    assert extract_selected_skills(messages)[0].body == body
+
+
 def test_skill_read_twice_keeps_the_fullest_body():
     """Repeated reads of one skill collapse, keeping the read that carried the whole file."""
     body = "---\nname: chart-builder\ndescription: Charts.\n---\n\n## Phase 1\nBuild the chart.\n"

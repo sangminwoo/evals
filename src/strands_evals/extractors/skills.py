@@ -102,6 +102,22 @@ _ACKNOWLEDGEMENT = re.compile(
     r"\b(?:\s*[:.]?\s*.*)?$",
     re.IGNORECASE,
 )
+_LOAD_ERROR = re.compile(
+    # A refused load is not the skill body either, and it does not arrive marked as an error.
+    # The Strands AgentSkills plugin returns these as plain strings from an `@tool` function,
+    # and `@tool` reports a plain string return as `status="success"`, so `_result_failed` sees
+    # nothing wrong and the judge would be handed "Skill 'x' not found. Available skills: ..."
+    # as the instructions the agent was supposed to follow.
+    # Matched without DOTALL, like `_ACKNOWLEDGEMENT`: only a result that is nothing but the
+    # status line is discarded, so a multi-line body is never thrown away over its first line.
+    r"^(?:"
+    r"error\s*:\s*skill_name\s+is\s+required"
+    r"|skill\s+(?:'[^']*'|\"[^\"]*\"|[\w.-]+)\s+(?:was\s+|is\s+)?not\s+found"
+    r"|(?:unknown|unrecognized)\s+skill\b"
+    r"|no\s+such\s+skill\b"
+    r")\s*[:.]?\s*.*$",
+    re.IGNORECASE,
+)
 
 
 def _parse_available_block(text: str) -> list[AvailableSkill]:
@@ -261,7 +277,7 @@ def _body_from_result(result: Any) -> str | None:
     if _result_failed(result):
         return None
     text = _content_text(result).strip()
-    if not text or _ACKNOWLEDGEMENT.fullmatch(text):
+    if not text or _ACKNOWLEDGEMENT.fullmatch(text) or _LOAD_ERROR.fullmatch(text):
         return None
 
     # Some tool integrations JSON-encode their structured result.
