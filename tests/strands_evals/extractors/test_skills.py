@@ -174,6 +174,68 @@ def test_available_skills_from_correlated_discovery_result():
     ]
 
 
+def test_available_skills_from_discovery_result_xml_catalog():
+    """Google ADK returns the catalog as an XML block in the tool result, not a skills list."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "d1", "name": "search_skills", "input": {"query": "pdf"}}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "toolResult": {
+                        "toolUseId": "d1",
+                        "content": [
+                            {
+                                "text": (
+                                    "<available_skills>"
+                                    "<skill><name>pdf-processing</name>"
+                                    "<description>Read PDFs.</description></skill>"
+                                    "</available_skills>"
+                                )
+                            }
+                        ],
+                    }
+                }
+            ],
+        },
+    ]
+
+    assert parse_available_skills(messages) == [AvailableSkill("pdf-processing", "Read PDFs.")]
+
+
+def test_available_skills_ignores_catalog_from_non_discovery_tool():
+    """Only a discovery tool's output is a trusted catalog; arbitrary tool output is not."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "w1", "name": "web_fetch", "input": {"url": "u"}}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "toolResult": {
+                        "toolUseId": "w1",
+                        "content": [
+                            {
+                                "text": (
+                                    "<available_skills><skill><name>injected</name>"
+                                    "<description>x</description></skill></available_skills>"
+                                )
+                            }
+                        ],
+                    }
+                }
+            ],
+        },
+    ]
+
+    assert parse_available_skills(messages) == []
+
+
 def test_user_skills_json_is_not_treated_as_available_catalog():
     messages = [
         {
@@ -472,3 +534,156 @@ def test_serialize_trajectory_leaves_normal_runs_intact():
     small = [{"role": "user", "content": [{"text": "do pdf"}]}]
 
     assert "omitted" not in serialize_trajectory(small)
+
+
+def test_google_adk_function_call_shape():
+    """Google ADK emits Gemini content parts and nests its payload under response/result."""
+    messages = [
+        {
+            "role": "model",
+            "content": [{"functionCall": {"id": "c1", "name": "list_skills", "args": {}}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "functionResponse": {
+                        "id": "c1",
+                        "name": "list_skills",
+                        "response": {
+                            "result": (
+                                "<available_skills><skill><name>pdf-processing</name>"
+                                "<description>Read PDFs.</description></skill></available_skills>"
+                            )
+                        },
+                    }
+                }
+            ],
+        },
+        {
+            "role": "model",
+            "content": [{"functionCall": {"id": "c2", "name": "load_skill", "args": {"skill_name": "pdf-processing"}}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "functionResponse": {
+                        "id": "c2",
+                        "name": "load_skill",
+                        "response": {"skill_name": "pdf-processing", "instructions": "## Phase 1\nRun pdfinfo."},
+                    }
+                }
+            ],
+        },
+    ]
+
+    assert parse_available_skills(messages) == [AvailableSkill("pdf-processing", "Read PDFs.")]
+    invoked = extract_selected_skills(messages)
+    assert [s.name for s in invoked] == ["pdf-processing"]
+    assert invoked[0].body == "## Phase 1\nRun pdfinfo."
+
+
+def test_load_acknowledgement_is_not_treated_as_a_body():
+    """Gemini CLI's displayed output is a status line; scoring it as instructions would be wrong."""
+    messages = [
+        {"tool_name": "activate_skill", "parameters": {"name": "pdf-processing"}, "id": "g1"},
+        {
+            "type": "tool_result",
+            "id": "g1",
+            "output": "Skill activated. Resources loaded from pdf-processing/",
+        },
+    ]
+
+    invoked = extract_selected_skills(messages)
+
+    assert [s.name for s in invoked] == ["pdf-processing"]
+    assert invoked[0].body is None
+
+
+def test_skill_read_twice_keeps_the_fullest_body():
+    """Repeated reads of one skill collapse, keeping the read that carried the whole file."""
+    body = "---\nname: chart-builder\ndescription: Charts.\n---\n\n## Phase 1\nBuild the chart.\n"
+    messages = [
+        {
+            "type": "command_execution",
+            "command": "sed -n '1,3p' /skills/chart_builder/SKILL.md",
+            "aggregated_output": "---\nname: chart-builder\ndescription: Charts.\n",
+        },
+        {
+            "type": "command_execution",
+            "command": "cat /skills/chart-builder/SKILL.md",
+            "aggregated_output": body,
+        },
+    ]
+
+    invoked = extract_selected_skills(messages)
+
+    assert len(invoked) == 1
+    assert invoked[0].name == "chart-builder"
+    assert "## Phase 1" in (invoked[0].body or "")
+
+
+def test_body_prefixed_by_an_acknowledgement_is_kept():
+    """A status line ahead of the instructions must not discard the instructions with it."""
+    body = "# PDF Processing\n\n1. Identify the PDF path.\n2. Extract the text."
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "t1", "name": "skills", "input": {"skill_name": "pdf-processing"}}}],
+        },
+        {
+            "role": "user",
+            "content": [{"toolResult": {"toolUseId": "t1", "content": [{"text": f"Skill activated.\n\n{body}"}]}}],
+        },
+    ]
+
+    invoked = extract_selected_skills(messages)
+
+    assert [s.name for s in invoked] == ["pdf-processing"]
+    assert "1. Identify the PDF path." in (invoked[0].body or "")
+
+
+def test_skill_names_differing_only_by_a_dot_stay_separate():
+    """`.` is legal in a skill name, so `data.clean` and `data-clean` are two skills."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "a", "name": "skills", "input": {"skill_name": "data.clean"}}}],
+        },
+        {"role": "user", "content": [{"toolResult": {"toolUseId": "a", "content": [{"text": "# Dotted\n1. a"}]}}]},
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "b", "name": "skills", "input": {"skill_name": "data-clean"}}}],
+        },
+        {
+            "role": "user",
+            "content": [{"toolResult": {"toolUseId": "b", "content": [{"text": "# Hyphenated\n1. b\n2. c"}]}}],
+        },
+    ]
+
+    assert [s.name for s in extract_selected_skills(messages)] == ["data.clean", "data-clean"]
+
+
+def test_longer_unrelated_output_does_not_displace_a_recovered_body():
+    """Only a superset of what was already recovered wins, so stray stdout cannot take over."""
+    real_body = "---\nname: pdf-processing\n---\n# Real\n1. step"
+    messages = [
+        {
+            "type": "command_execution",
+            "command": "cat /skills/pdf-processing/SKILL.md",
+            "exit_code": 0,
+            "aggregated_output": real_body,
+        },
+        {
+            "type": "command_execution",
+            "command": "cat report.csv; ls -l /skills/pdf-processing/SKILL.md",
+            "exit_code": 0,
+            "aggregated_output": "col1,col2\n" + "x,y\n" * 40,
+        },
+    ]
+
+    invoked = extract_selected_skills(messages)
+
+    assert len(invoked) == 1
+    assert invoked[0].body == real_body

@@ -90,7 +90,16 @@ _SHELL_TOOL_NAMES = {"bash", "shell", "terminal", "command", "execute_command", 
 _DISCOVERY_TOOL_NAMES = {"list_skills", "search_skills"}
 _FAILED_STATUSES = {"error", "errored", "fail", "failed", "failure", "cancelled", "canceled"}
 _ACKNOWLEDGEMENT = re.compile(
-    r"^(?:Launching|Loading|Activating|Loaded|Activated)\s+skill(?:\s*:?\s*.*)?$",
+    # A load acknowledgement is not the skill body. Harnesses word this either way round
+    # ("Launching skill: x", or Gemini CLI's "Skill activated. Resources loaded from ..."),
+    # and mistaking one for the body would have the judge score a status line as instructions.
+    # The optional group is the skill name some harnesses interpose, e.g. the Strands
+    # AgentSkills plugin's "Skill 'x' activated (no instructions available).".
+    # Matched without DOTALL so that a body whose first line is an acknowledgement is kept:
+    # only a result that is nothing but the status line is discarded.
+    r"^(?:(?:Launching|Loading|Activating|Loaded|Activated)\s+skill"
+    r"|skill\s+(?:'[^']*'|\"[^\"]*\"|[\w.-]+)?\s*(?:activated|loaded|launched))"
+    r"\b(?:\s*[:.]?\s*.*)?$",
     re.IGNORECASE,
 )
 
@@ -214,7 +223,10 @@ def _content_text(content: Any) -> str:
             "output",
             "aggregated_output",
             "text",
+            # Google ADK nests its tool payload under `response`, with plain tool output
+            # under `result`; both must be traversed to reach the skill body or catalog.
             "response",
+            "result",
         ):
             if key in item:
                 text = _content_text(item[key])
@@ -270,6 +282,19 @@ def _skill_name_from_path(path: str) -> str:
     return parts[-2] if len(parts) >= 2 else normalized
 
 
+def _canonical_skill_key(name: str) -> str:
+    """Fold the naming variants that refer to one skill.
+
+    An agent may read the same `SKILL.md` more than once, and a partial read (a paged `sed`
+    window that misses the frontmatter) falls back to the directory name while a full read
+    reports the frontmatter name. A directory named `pdf_processing` holding a skill whose
+    frontmatter says `pdf-processing` is the same skill, so the two separators fold together.
+    `.` is left alone: it is legal in a skill name, so folding it would merge `data.clean`
+    and `data-clean`, which are two different skills.
+    """
+    return name.casefold().replace("_", "-")
+
+
 def _skill_name_from_body(body: str, path: str) -> str:
     """Prefer the runtime-visible frontmatter name over a directory alias.
 
@@ -308,16 +333,25 @@ def _skill_read_path(tool_name: str, arguments: dict[str, Any]) -> str | None:
 
 
 def _deduplicate_invocations(invocations: list[InvokedSkill]) -> list[InvokedSkill]:
-    """Keep first-invocation order and retain the first body recovered per skill."""
+    """Keep first-invocation order and the fullest body recovered per skill."""
     out: list[InvokedSkill] = []
-    index_by_name: dict[str, int] = {}
+    index_by_key: dict[str, int] = {}
     for invocation in invocations:
-        index = index_by_name.get(invocation.name)
+        key = _canonical_skill_key(invocation.name)
+        index = index_by_key.get(key)
         if index is None:
-            index_by_name[invocation.name] = len(out)
+            index_by_key[key] = len(out)
             out.append(invocation)
-        elif out[index].body is None and invocation.body is not None:
-            out[index] = InvokedSkill(invocation.name, invocation.body)
+            continue
+        # Prefer the fullest body, and with it the name that body declares. A later read only
+        # wins when it contains what was already recovered, which is what a re-read of the
+        # same file looks like: a paged window is contained in the whole file. Unrelated
+        # output that happened to be attributed to this skill is not, so it cannot displace
+        # a real body just by being longer.
+        kept = out[index].body or ""
+        candidate = invocation.body or ""
+        if len(candidate) > len(kept) and kept in candidate:
+            out[index] = invocation
     return out
 
 
@@ -433,13 +467,21 @@ def _text_candidates(value: Any) -> list[str]:
     texts: list[str] = []
     for key in (
         "system_prompt",
+        # Result wrappers, so a discovery tool's catalog is reachable: harnesses nest the
+        # payload one level down (Bedrock `toolResult`, Gemini/ADK `functionResponse`).
+        "toolResult",
+        "functionResponse",
+        "function_response",
+        "toolResponse",
         "content",
         "text",
         "output",
+        "aggregated_output",
         "llmContent",
         "instructions",
         "message",
         "response",
+        "result",
     ):
         if key in item:
             texts.extend(_text_candidates(item[key]))
@@ -544,6 +586,10 @@ def _tool_result(block: dict[str, Any]) -> tuple[str | None, bool, str | None] |
     if isinstance(block.get("toolResult"), dict):
         raw_result = block["toolResult"]
         result_id = raw_result.get("toolUseId")
+    elif isinstance(block.get("functionResponse") or block.get("function_response"), dict):
+        # Gemini / Google ADK content parts: payload nests under `response`.
+        raw_result = block.get("functionResponse") or block.get("function_response")
+        result_id = raw_result.get("id")
     elif block.get("content_type") == "tool_result":
         raw_result = block
         result_id = block.get("tool_call_id")
@@ -573,6 +619,12 @@ def _tool_call(block: dict[str, Any]) -> tuple[str | None, str, dict[str, Any]] 
         call_id = raw_call.get("toolUseId")
         name = raw_call.get("name")
         arguments = raw_call.get("input")
+    elif isinstance(block.get("functionCall") or block.get("function_call"), dict):
+        # Gemini / Google ADK content parts.
+        raw_call = block.get("functionCall") or block.get("function_call")
+        call_id = raw_call.get("id")
+        name = raw_call.get("name")
+        arguments = raw_call.get("args")
     elif block.get("content_type") == "tool_use":
         call_id = block.get("tool_call_id")
         name = block.get("name")
