@@ -117,6 +117,57 @@ def test_missing_trajectory_is_not_scored_as_abstention(mock_agent_class):
 
 
 @patch(_MODULE)
+def test_abstention_with_no_available_skills_is_not_scored(mock_agent_class):
+    """With nothing on offer and nothing invoked there was no selection decision to judge.
+
+    A "Yes" would credit the agent for declining an offer it never received, and a "No" would
+    penalize it for the same. Not every trajectory carries a catalog, so this is common.
+    """
+    case = EvaluationData(
+        input="Extract text from report.pdf",
+        actual_output="done",
+        actual_trajectory=[{"role": "user", "content": [{"text": "Extract text from report.pdf"}]}],
+    )
+
+    result = SkillSelectionAccuracyEvaluator().evaluate(case)
+
+    assert len(result) == 1
+    assert result[0].label == "not_applicable"
+    assert result[0].reason == "no skills were available to select from"
+    assert result[0].test_pass is True
+    mock_agent_class.assert_not_called()  # nothing to judge, so no judge call
+
+
+@pytest.mark.asyncio
+@patch(_MODULE)
+async def test_abstention_with_no_available_skills_is_not_scored_async(mock_agent_class):
+    case = EvaluationData(input="do pdf", actual_output="done", actual_trajectory=[])
+
+    result = await SkillSelectionAccuracyEvaluator().evaluate_async(case)
+
+    assert len(result) == 1
+    assert result[0].label == "not_applicable"
+    mock_agent_class.assert_not_called()
+
+
+@patch(_MODULE)
+def test_invocation_with_no_catalog_is_still_judged(mock_agent_class):
+    """A skill that was actually invoked is a real decision, catalog or not."""
+    mock_agent = Mock()
+    mock_result = Mock()
+    mock_result.structured_output = SkillSelectionRating(reasoning="fits", score=SkillSelectionScore.YES)
+    mock_agent.return_value = mock_result
+    mock_agent_class.return_value = mock_agent
+    case = _case("pdf-processing")
+    case.actual_trajectory = case.actual_trajectory[1:]  # drop the <available_skills> system message
+
+    result = SkillSelectionAccuracyEvaluator().evaluate(case)
+
+    assert [r.label for r in result] == ["pdf-processing"]
+    assert mock_agent.call_count == 1
+
+
+@patch(_MODULE)
 def test_evaluate_abstention_single_row(mock_agent_class):
     # No skill invoked: one row judging the abstention, labeled "abstained".
     mock_agent = Mock()

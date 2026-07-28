@@ -10,6 +10,8 @@ from ..types.evaluation import EvaluationData, EvaluationOutput, InputT, OutputT
 from .evaluator import Evaluator
 from .prompt_templates.skill_selection_accuracy import get_template
 
+_NOT_APPLICABLE = "not_applicable"
+
 
 class SkillSelectionScore(str, Enum):
     """Binary skill selection appropriateness ratings."""
@@ -52,6 +54,9 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
     def _available_str(self, evaluation_case: EvaluationData[InputT, OutputT]) -> str:
         available = parse_available_skills(evaluation_case.actual_trajectory)
         return "\n".join(f"- {s.name}: {s.description}" for s in available) if available else "(none listed)"
+
+    def _has_catalog(self, evaluation_case: EvaluationData[InputT, OutputT]) -> bool:
+        return bool(parse_available_skills(evaluation_case.actual_trajectory))
 
     def _case_context(self, evaluation_case: EvaluationData[InputT, OutputT]) -> tuple[str, str]:
         """The two halves of the prompt that do not depend on which decision is being judged.
@@ -111,14 +116,31 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
         return cast(SkillSelectionRating, result.structured_output)
 
     @staticmethod
-    def _missing_trajectory_row() -> EvaluationOutput:
+    def _not_applicable_row(reason: str, test_pass: bool) -> EvaluationOutput:
+        return EvaluationOutput(score=0.0, test_pass=test_pass, reason=reason, label=_NOT_APPLICABLE)
+
+    @classmethod
+    def _missing_trajectory_row(cls) -> EvaluationOutput:
         """A missing trajectory is absent data, not a correct abstention, so it is not scored."""
-        return EvaluationOutput(score=0.0, test_pass=False, reason="no trajectory provided", label="not_applicable")
+        return cls._not_applicable_row("no trajectory provided", test_pass=False)
+
+    @classmethod
+    def _no_catalog_row(cls) -> EvaluationOutput:
+        """No advertised skills and no invocation means there was no selection decision to make.
+
+        Judging it either way is wrong: a "Yes" credits the agent for declining an offer it never
+        received, and a "No" penalizes it for the same. This also covers the case where skills were
+        on offer but the trajectory did not carry the catalog, where the right verdict is unknowable
+        rather than favorable.
+        """
+        return cls._not_applicable_row("no skills were available to select from", test_pass=True)
 
     def evaluate(self, evaluation_case: EvaluationData[InputT, OutputT]) -> list[EvaluationOutput]:
         if evaluation_case.actual_trajectory is None:
             return [self._missing_trajectory_row()]
         invoked = extract_selected_skills(evaluation_case.actual_trajectory)
+        if not invoked and not self._has_catalog(evaluation_case):
+            return [self._no_catalog_row()]
         context = self._case_context(evaluation_case)
         if not invoked:
             rating = self._judge(self._prompt_for(context, None))
@@ -133,6 +155,8 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
         if evaluation_case.actual_trajectory is None:
             return [self._missing_trajectory_row()]
         invoked = extract_selected_skills(evaluation_case.actual_trajectory)
+        if not invoked and not self._has_catalog(evaluation_case):
+            return [self._no_catalog_row()]
         context = self._case_context(evaluation_case)
         if not invoked:
             rating = await self._judge_async(self._prompt_for(context, None))
