@@ -17,6 +17,9 @@ from strands_evals.evaluators import (
     Evaluator,
     InteractionsEvaluator,
     OutputEvaluator,
+    SkillInstructionFollowingEvaluator,
+    SkillInvoked,
+    SkillSelectionAccuracyEvaluator,
     StartsWith,
     ToolCalled,
     TrajectoryEvaluator,
@@ -1689,6 +1692,31 @@ def test_deterministic_evaluator_from_dict_round_trip():
 
     assert original_report.scores == restored_report.scores
     assert original_report.test_passes == restored_report.test_passes
+
+
+def test_skill_evaluator_from_dict_round_trip():
+    """The skill evaluators must be loadable from an experiment file, like every other built-in.
+
+    `from_dict` resolves `evaluator_type` against a fixed registry, so an evaluator missing from it
+    raises "Cannot find ..." and the experiment file cannot be run at all.
+    """
+    experiment = Experiment(
+        cases=[Case(name="pdf", input="Extract text from report.pdf")],
+        evaluators=[
+            SkillSelectionAccuracyEvaluator(),
+            SkillInstructionFollowingEvaluator(),
+            SkillInvoked(skill_name="pdf-processing"),
+        ],
+    )
+
+    restored = Experiment.from_dict(experiment.to_dict())
+
+    assert [e.get_type_name() for e in restored.evaluators] == [
+        "SkillSelectionAccuracyEvaluator",
+        "SkillInstructionFollowingEvaluator",
+        "SkillInvoked",
+    ]
+    assert restored.evaluators[2].skill_name == "pdf-processing"
 
 
 def test_deterministic_evaluator_error_isolation():

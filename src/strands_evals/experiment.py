@@ -22,7 +22,7 @@ from .evaluation_data_store import EvaluationDataStore
 from .evaluators.coherence_evaluator import CoherenceEvaluator
 from .evaluators.conciseness_evaluator import ConcisenessEvaluator
 from .evaluators.correctness_evaluator import CorrectnessEvaluator
-from .evaluators.deterministic import Contains, Equals, StartsWith, StateEquals, ToolCalled
+from .evaluators.deterministic import Contains, Equals, SkillInvoked, StartsWith, StateEquals, ToolCalled
 from .evaluators.evaluator import Evaluator
 from .evaluators.faithfulness_evaluator import FaithfulnessEvaluator
 from .evaluators.goal_success_rate_evaluator import GoalSuccessRateEvaluator
@@ -38,6 +38,8 @@ from .evaluators.multimodal_overall_quality_evaluator import MultimodalOverallQu
 from .evaluators.output_evaluator import OutputEvaluator
 from .evaluators.refusal_evaluator import RefusalEvaluator
 from .evaluators.response_relevance_evaluator import ResponseRelevanceEvaluator
+from .evaluators.skill_instruction_following_evaluator import SkillInstructionFollowingEvaluator
+from .evaluators.skill_selection_accuracy_evaluator import SkillSelectionAccuracyEvaluator
 from .evaluators.stereotyping_evaluator import StereotypingEvaluator
 from .evaluators.tool_parameter_accuracy_evaluator import ToolParameterAccuracyEvaluator
 from .evaluators.tool_selection_accuracy_evaluator import ToolSelectionAccuracyEvaluator
@@ -778,6 +780,8 @@ class Experiment(Generic[InputT, OutputT]):
             "InstructionFollowingEvaluator": InstructionFollowingEvaluator,
             "RefusalEvaluator": RefusalEvaluator,
             "ResponseRelevanceEvaluator": ResponseRelevanceEvaluator,
+            "SkillInstructionFollowingEvaluator": SkillInstructionFollowingEvaluator,
+            "SkillSelectionAccuracyEvaluator": SkillSelectionAccuracyEvaluator,
             "StereotypingEvaluator": StereotypingEvaluator,
             "ToolParameterAccuracyEvaluator": ToolParameterAccuracyEvaluator,
             "ToolSelectionAccuracyEvaluator": ToolSelectionAccuracyEvaluator,
@@ -791,6 +795,7 @@ class Experiment(Generic[InputT, OutputT]):
             "StartsWith": StartsWith,
             "StateEquals": StateEquals,
             "ToolCalled": ToolCalled,
+            "SkillInvoked": SkillInvoked,
         }
         all_evaluators: dict[str, type[Evaluator]] = {
             **default_evaluators,
