@@ -30,6 +30,8 @@ nearly all skipped is "Not Followed").
 - A plan, unexecuted code snippet, or claim that a step will be done is not evidence
   that an executable step was carried out. Require an action or result in the trajectory.
 - If the skill has no clearly enumerable steps, treat its core instructions as the steps.
+- If the skill body prescribes nothing at all (it is reference material rather than instructions),
+  return an empty step list rather than inventing steps.
 
 ## Output Format
 Provide, for each step, its status (covered / partial / skipped) with a short evidence note;

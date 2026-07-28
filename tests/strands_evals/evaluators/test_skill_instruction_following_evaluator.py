@@ -80,6 +80,18 @@ def test_rating_derives_coverage_from_step_statuses():
     assert _rating("covered", "partial", "skipped").coverage == 0.5
 
 
+def test_rating_accepts_no_steps():
+    """A skill body that prescribes nothing is a valid judgment, not a schema violation.
+
+    `steps` is the structured-output schema, so rejecting an empty list sends the judge back to
+    re-emit the same answer until the retry loop exhausts the recursion limit.
+    """
+    rating = SkillFollowingRating(reasoning="reference material only", steps=[], score=_ordinal_for(0.0))
+
+    assert rating.steps == []
+    assert rating.coverage == 0.0  # vacuous, not a failure; callers check `steps` to tell them apart
+
+
 def test_score_mapping_is_five_point_ordinal():
     ev = SkillInstructionFollowingEvaluator()
     assert ev._score_mapping == {
@@ -92,12 +104,17 @@ def test_score_mapping_is_five_point_ordinal():
 
 
 @pytest.mark.parametrize("field", ["step", "evidence"])
-def test_step_rating_rejects_empty_required_text(field):
+def test_step_rating_accepts_empty_text(field):
+    """No length floor on the judge's own prose.
+
+    `SkillStepRating` is part of the structured-output schema, and a rejected value is not a
+    caught error: the judge is sent back to produce the same answer again, so a plausible output
+    (empty `evidence` for a step it found no evidence of) becomes an unbounded retry loop.
+    """
     values = {"step": "step", "status": "covered", "evidence": "evidence"}
     values[field] = ""
 
-    with pytest.raises(ValueError):
-        SkillStepRating(**values)
+    assert getattr(SkillStepRating(**values), field) == ""
 
 
 def test_prompt_includes_trajectory_evidence():
@@ -181,6 +198,31 @@ def test_no_skill_returns_not_applicable_row():
     assert len(result) == 1
     assert result[0].label == "not_applicable"
     assert result[0].test_pass is True  # no violation
+
+
+@patch(_MODULE)
+def test_skill_prescribing_nothing_is_not_applicable(mock_agent_class):
+    """A skill body with no prescribed steps has nothing to follow, so it is not scored.
+
+    Scoring it either way would be arbitrary: 0.0 reads as a failure to adhere, 1.0 as vacuous
+    adherence, and both distort the mean.
+    """
+    mock_agent = Mock()
+    mock_result = Mock()
+    mock_result.structured_output = SkillFollowingRating(
+        reasoning="the body is reference material, not instructions",
+        steps=[],
+        score=SkillFollowingScore.NOT_FOLLOWED,
+    )
+    mock_agent.return_value = mock_result
+    mock_agent_class.return_value = mock_agent
+
+    result = SkillInstructionFollowingEvaluator().evaluate(_case([("pdf-processing", "# Reference\nField notes.")]))
+
+    assert len(result) == 1
+    assert result[0].label == "not_applicable"
+    assert result[0].reason == "pdf-processing: no prescribed steps found in the skill body"
+    assert result[0].test_pass is True
 
 
 def test_missing_trajectory_does_not_pass():

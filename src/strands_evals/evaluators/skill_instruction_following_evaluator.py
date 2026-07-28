@@ -47,8 +47,12 @@ class SkillFollowingRating(BaseModel):
     """Structured output for skill instruction following evaluation."""
 
     reasoning: str = Field(description="Brief overall reasoning about adherence to the skill")
+    # Still required, but deliberately without `min_length=1`. This model is the
+    # structured-output schema, and a skill body with nothing prescriptive in it (reference
+    # material, frontmatter only) makes an empty list the correct answer. Rejecting it sends the
+    # judge back to re-emit the same answer until the retry loop dies of recursion depth. The
+    # empty case is handled in `_rating_to_output` instead.
     steps: list["SkillStepRating"] = Field(
-        min_length=1,
         description="One status and evidence record per prescribed step, in instruction order",
     )
     score: SkillFollowingScore = Field(
@@ -60,7 +64,13 @@ class SkillFollowingRating(BaseModel):
 
     @property
     def coverage(self) -> float:
-        """Derive coverage from structured statuses instead of trusting model arithmetic."""
+        """Derive coverage from structured statuses instead of trusting model arithmetic.
+
+        Zero when there are no steps, which is the vacuous case rather than a failure; callers
+        distinguish the two by checking `steps` themselves.
+        """
+        if not self.steps:
+            return 0.0
         weights = {"covered": 1.0, "partial": 0.5, "skipped": 0.0}
         return sum(weights[step.status] for step in self.steps) / len(self.steps)
 
@@ -68,9 +78,9 @@ class SkillFollowingRating(BaseModel):
 class SkillStepRating(BaseModel):
     """Judge result for one prescribed skill step."""
 
-    step: str = Field(min_length=1, description="The prescribed step being evaluated")
+    step: str = Field(description="The prescribed step being evaluated")
     status: Literal["covered", "partial", "skipped"]
-    evidence: str = Field(min_length=1, description="Concrete trajectory evidence for the status")
+    evidence: str = Field(description="Concrete trajectory evidence for the status")
 
 
 class SkillInstructionFollowingEvaluator(Evaluator[InputT, OutputT]):
@@ -133,6 +143,10 @@ class SkillInstructionFollowingEvaluator(Evaluator[InputT, OutputT]):
         )
 
     def _rating_to_output(self, skill: InvokedSkill, rating: SkillFollowingRating) -> EvaluationOutput:
+        # A skill that prescribes nothing has nothing to follow, so scoring it either way would be
+        # arbitrary: it is the same vacuous case as "no skill invoked", not a failure to adhere.
+        if not rating.steps:
+            return self._not_applicable_row(f"{skill.name}: no prescribed steps found in the skill body")
         # Score off the five-point ordinal rating via `_score_mapping`, following the
         # framework's graded-quality judges. The per-step statuses ground that rating and
         # are preserved in `reason` (a plain field), so the base output schema is untouched.
