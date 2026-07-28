@@ -97,6 +97,9 @@ def test_evaluate_loops_per_invoked_skill(mock_agent_class):
     assert len(result) == 2
     assert {r.label for r in result} == {"pdf-processing", "spreadsheet"}
     assert mock_agent.call_count == 2
+    # A fresh judge per skill: a reused Agent would carry the first verdict into the second
+    # prompt as conversation history and resend the trajectory on top of it.
+    assert mock_agent_class.call_count == 2
 
 
 @patch(_MODULE)
@@ -146,3 +149,28 @@ async def test_evaluate_async_loops_per_skill(mock_agent_class):
     assert len(result) == 2
     assert {r.label for r in result} == {"pdf-processing", "spreadsheet"}
     assert all(r.score == 1.0 for r in result)
+    assert mock_agent_class.call_count == 2  # a fresh judge per skill, same as the sync path
+
+
+@patch(_MODULE)
+def test_each_judge_sees_exactly_one_prompt(mock_agent_class):
+    """Contract: no judge is asked twice, so no verdict leaks into the next skill's prompt."""
+    agents = []
+
+    def new_agent(*_args, **_kwargs):
+        agent = Mock()
+        result = Mock()
+        result.structured_output = SkillSelectionRating(reasoning="fits", score=SkillSelectionScore.YES)
+        agent.return_value = result
+        agents.append(agent)
+        return agent
+
+    mock_agent_class.side_effect = new_agent
+
+    SkillSelectionAccuracyEvaluator().evaluate(_case(["pdf-processing", "spreadsheet"]))
+
+    assert len(agents) == 2
+    assert [a.call_count for a in agents] == [1, 1]
+    prompts = [a.call_args.args[0] for a in agents]
+    assert "invoked the skill: pdf-processing" in prompts[0]
+    assert "invoked the skill: spreadsheet" in prompts[1]

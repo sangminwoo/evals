@@ -53,25 +53,36 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
         available = parse_available_skills(evaluation_case.actual_trajectory)
         return "\n".join(f"- {s.name}: {s.description}" for s in available) if available else "(none listed)"
 
+    def _case_context(self, evaluation_case: EvaluationData[InputT, OutputT]) -> tuple[str, str]:
+        """The two halves of the prompt that do not depend on which decision is being judged.
+
+        Built once per case: the skill catalog and the serialized trajectory are the same for
+        every invoked skill, and serializing a long trajectory once per skill is wasted work.
+        """
+        head = f"## Task\n{evaluation_case.input}\n\n## Available skills\n{self._available_str(evaluation_case)}\n\n"
+        tail = (
+            f"## Agent trajectory\n{serialize_trajectory(evaluation_case.actual_trajectory)}\n\n"
+            f"## Agent's final response\n{evaluation_case.actual_output}"
+        )
+        return head, tail
+
+    @staticmethod
+    def _prompt_for(context: tuple[str, str], focus_skill: str | None) -> str:
+        """Prompt judging one focal decision: invoking `focus_skill`, or abstaining if None."""
+        head, tail = context
+        if focus_skill is not None:
+            decision = f"## Decision under evaluation\nThe agent invoked the skill: {focus_skill}\n"
+        else:
+            decision = "## Decision under evaluation\nThe agent invoked no skill (abstained).\n"
+        return f"{head}{decision}\n{tail}"
+
     def _build_prompt(
         self,
         evaluation_case: EvaluationData[InputT, OutputT],
         focus_skill: str | None,
     ) -> str:
         """Prompt judging one focal decision: invoking `focus_skill`, or abstaining if None."""
-        trajectory = evaluation_case.actual_trajectory
-        available_str = self._available_str(evaluation_case)
-        if focus_skill is not None:
-            decision = f"## Decision under evaluation\nThe agent invoked the skill: {focus_skill}\n"
-        else:
-            decision = "## Decision under evaluation\nThe agent invoked no skill (abstained).\n"
-        return (
-            f"## Task\n{evaluation_case.input}\n\n"
-            f"## Available skills\n{available_str}\n\n"
-            f"{decision}\n"
-            f"## Agent trajectory\n{serialize_trajectory(trajectory)}\n\n"
-            f"## Agent's final response\n{evaluation_case.actual_output}"
-        )
+        return self._prompt_for(self._case_context(evaluation_case), focus_skill)
 
     def _rating_to_output(self, rating: SkillSelectionRating, label: str) -> EvaluationOutput:
         normalized_score = self._score_mapping[rating.score]
@@ -82,8 +93,21 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
             label=label,
         )
 
-    def _judge(self, agent: Agent, prompt: str) -> SkillSelectionRating:
-        result = agent(prompt, structured_output_model=SkillSelectionRating)
+    def _new_judge(self) -> Agent:
+        """A fresh judge per decision.
+
+        Each skill is judged independently, so reusing one `Agent` across the loop would both
+        carry the previous verdicts into the next prompt as conversation history and resend the
+        whole trajectory on top of it, growing every request.
+        """
+        return Agent(model=self.model, system_prompt=self.system_prompt, callback_handler=None)
+
+    def _judge(self, prompt: str) -> SkillSelectionRating:
+        result = self._new_judge()(prompt, structured_output_model=SkillSelectionRating)
+        return cast(SkillSelectionRating, result.structured_output)
+
+    async def _judge_async(self, prompt: str) -> SkillSelectionRating:
+        result = await self._new_judge().invoke_async(prompt, structured_output_model=SkillSelectionRating)
         return cast(SkillSelectionRating, result.structured_output)
 
     @staticmethod
@@ -95,13 +119,13 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
         if evaluation_case.actual_trajectory is None:
             return [self._missing_trajectory_row()]
         invoked = extract_selected_skills(evaluation_case.actual_trajectory)
-        evaluator_agent = Agent(model=self.model, system_prompt=self.system_prompt, callback_handler=None)
+        context = self._case_context(evaluation_case)
         if not invoked:
-            rating = self._judge(evaluator_agent, self._build_prompt(evaluation_case, None))
+            rating = self._judge(self._prompt_for(context, None))
             return [self._rating_to_output(rating, label="abstained")]
         results = []
         for skill in invoked:
-            rating = self._judge(evaluator_agent, self._build_prompt(evaluation_case, skill.name))
+            rating = self._judge(self._prompt_for(context, skill.name))
             results.append(self._rating_to_output(rating, label=skill.name))
         return results
 
@@ -109,17 +133,12 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
         if evaluation_case.actual_trajectory is None:
             return [self._missing_trajectory_row()]
         invoked = extract_selected_skills(evaluation_case.actual_trajectory)
-        evaluator_agent = Agent(model=self.model, system_prompt=self.system_prompt, callback_handler=None)
-
-        async def judge(prompt: str) -> SkillSelectionRating:
-            result = await evaluator_agent.invoke_async(prompt, structured_output_model=SkillSelectionRating)
-            return cast(SkillSelectionRating, result.structured_output)
-
+        context = self._case_context(evaluation_case)
         if not invoked:
-            rating = await judge(self._build_prompt(evaluation_case, None))
+            rating = await self._judge_async(self._prompt_for(context, None))
             return [self._rating_to_output(rating, label="abstained")]
         results = []
         for skill in invoked:
-            rating = await judge(self._build_prompt(evaluation_case, skill.name))
+            rating = await self._judge_async(self._prompt_for(context, skill.name))
             results.append(self._rating_to_output(rating, label=skill.name))
         return results
