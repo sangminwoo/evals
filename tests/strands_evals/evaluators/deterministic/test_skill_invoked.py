@@ -74,3 +74,77 @@ def test_skill_invoked_no_trajectory():
 async def test_skill_invoked_async():
     result = await SkillInvoked(skill_name="pdf-processing").evaluate_async(_case("pdf-processing"))
     assert result[0].score == 1.0
+
+
+def test_a_refusal_then_a_success_still_counts_as_invoked():
+    """The agent retried and got the skill, so the assertion that it was used holds."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "a", "name": "skills", "input": {"skill_name": "pdf-processing"}}}],
+        },
+        {
+            "role": "user",
+            "content": [{"toolResult": {"toolUseId": "a", "status": "error", "content": [{"text": "sandbox busy"}]}}],
+        },
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "b", "name": "skills", "input": {"skill_name": "pdf-processing"}}}],
+        },
+        {"role": "user", "content": [{"toolResult": {"toolUseId": "b", "content": [{"text": "# body"}]}}]},
+    ]
+    case = EvaluationData(input="do pdf", actual_output="done", actual_trajectory=messages)
+
+    result = SkillInvoked(skill_name="pdf-processing").evaluate(case)
+
+    assert result[0].test_pass is True
+    assert result[0].reason == "skill 'pdf-processing' was invoked"
+
+
+def test_repeated_refusals_report_how_many_attempts_were_made():
+    """One refusal and five are different runs: the second is an agent stuck in a retry loop."""
+    messages = []
+    for index in range(3):
+        messages.append(
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": f"t{index}",
+                            "name": "skills",
+                            "input": {"skill_name": "pdf-processing"},
+                        }
+                    }
+                ],
+            }
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {"toolResult": {"toolUseId": f"t{index}", "status": "error", "content": [{"text": "not found"}]}}
+                ],
+            }
+        )
+    case = EvaluationData(input="do pdf", actual_output="done", actual_trajectory=messages)
+
+    result = SkillInvoked(skill_name="pdf-processing").evaluate(case)
+
+    assert result[0].test_pass is False
+    assert result[0].reason == ("skill 'pdf-processing' was requested but the load failed (3 attempts): not found")
+
+
+def test_a_request_with_no_recorded_outcome_is_named_apart_from_never_asking():
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "t", "name": "skills", "input": {"skill_name": "pdf-processing"}}}],
+        }
+    ]
+    case = EvaluationData(input="do pdf", actual_output="done", actual_trajectory=messages)
+
+    result = SkillInvoked(skill_name="pdf-processing").evaluate(case)
+
+    assert result[0].test_pass is False
+    assert result[0].reason == "skill 'pdf-processing' was requested but the trajectory records no outcome"

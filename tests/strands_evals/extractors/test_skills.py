@@ -8,6 +8,7 @@ from strands_evals.extractors import (
     AvailableSkill,
     InvokedSkill,
     extract_selected_skills,
+    extract_skill_load_events,
     parse_available_skills,
 )
 from strands_evals.types.trace import (
@@ -1060,3 +1061,107 @@ def test_unkeyed_result_of_an_unrelated_tool_is_not_taken_as_the_skill_body():
     ]
 
     assert extract_selected_skills(messages) == [_loaded("pdf-processing", None)]
+
+
+# ---- The load-event layer ----------------------------------------------------
+#
+# `extract_selected_skills` reports one row per skill, which is what the judges want. These
+# assert the distinctions that folding necessarily loses, and that they survive one layer down.
+
+
+def test_events_keep_repeated_loads_that_the_summary_folds():
+    events = extract_skill_load_events(fx.DUPLICATE_LOAD_MESSAGES)
+    summary = extract_selected_skills(fx.DUPLICATE_LOAD_MESSAGES)
+
+    assert [e.name for e in events] == ["pdf-processing", "pdf-processing"]
+    assert len(summary) == 1
+    # Distinct calls, so an evaluator counting reloads has something to count.
+    assert len({e.call_id for e in events}) == 2
+    assert [e.position for e in events] == sorted(e.position for e in events)
+
+
+def test_a_call_whose_outcome_never_appears_is_attempted_not_loaded():
+    """A trajectory that stops before the result is not a load that succeeded silently.
+
+    The summary can only say the agent asked for the skill, so it reports it as invoked with no
+    body, which is the same row a successful load with an uncaptured body produces. The event
+    keeps the two apart.
+    """
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "no-result", "name": "skills", "input": {"skill_name": "xlsx"}}}],
+        }
+    ]
+
+    (event,) = extract_skill_load_events(messages)
+    assert (event.name, event.status, event.body) == ("xlsx", "attempted", None)
+
+    (loaded,) = extract_skill_load_events(fx.BODY_MISSING_MESSAGES)
+    assert loaded.status == "loaded"
+    assert loaded.body is None
+
+
+def test_a_refusal_and_its_retry_are_two_events_but_one_row():
+    body = "# PDF\n\n1. Read it."
+    messages = [
+        *_load_attempt("1", "pdf-processing", _REFUSED),
+        *_load_attempt("2", "pdf-processing", {"content": [{"text": body}]}),
+    ]
+
+    assert [(e.status, e.error) for e in extract_skill_load_events(messages)] == [
+        ("failed", "skill not found"),
+        ("loaded", None),
+    ]
+    assert extract_selected_skills(messages) == [_loaded("pdf-processing", body)]
+
+
+def test_events_from_a_session_carry_position_and_the_call_id():
+    spans = [
+        ToolExecutionSpan(
+            span_info=_span_info(),
+            tool_call=ToolCall(name="calculator", arguments={"expression": "2+2"}, tool_call_id="c-1"),
+            tool_result=ToolResult(content="4"),
+        ),
+        ToolExecutionSpan(
+            span_info=_span_info(),
+            tool_call=ToolCall(name="skills", arguments={"skill_name": "pdf-processing"}, tool_call_id="tu-1"),
+            tool_result=ToolResult(content=fx.SKILL_BODY, tool_call_id="tu-1"),
+        ),
+    ]
+
+    (event,) = extract_skill_load_events(_session(spans))
+    assert (event.name, event.status, event.call_id) == ("pdf-processing", "loaded", "tu-1")
+    # Position counts tool spans, so it locates the load among them rather than among skill loads.
+    assert event.position == 2
+
+
+def test_a_load_is_attributed_to_the_agent_that_made_it_when_the_trace_says_so():
+    """Which sub-agent loaded a skill, for traces whose mapper records it.
+
+    The trace types carry no agent identity, so this reads `metadata`. A trace without one
+    reports None rather than guessing.
+    """
+    spans = [
+        ToolExecutionSpan(
+            span_info=_span_info(),
+            metadata={"agent_name": "researcher"},
+            tool_call=ToolCall(name="skills", arguments={"skill_name": "pdf-processing"}, tool_call_id="a"),
+            tool_result=ToolResult(content=fx.SKILL_BODY),
+        ),
+        ToolExecutionSpan(
+            span_info=_span_info(),
+            tool_call=ToolCall(name="skills", arguments={"skill_name": "spreadsheet-analysis"}, tool_call_id="b"),
+            tool_result=ToolResult(content="# Spreadsheets\n\n1. Open it."),
+        ),
+    ]
+
+    assert [(e.name, e.agent_id) for e in extract_skill_load_events(_session(spans))] == [
+        ("pdf-processing", "researcher"),
+        ("spreadsheet-analysis", None),
+    ]
+
+
+def test_no_trajectory_yields_no_events():
+    assert extract_skill_load_events(None) == []
+    assert extract_skill_load_events([]) == []

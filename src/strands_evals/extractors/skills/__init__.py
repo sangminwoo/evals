@@ -1,10 +1,11 @@
 """Skill trajectory parsing helpers.
 
 `parse_available_skills` recovers the skills exposed to the agent (name plus
-description) from the harness-injected `<available_skills>` block, and
-`extract_selected_skills` recovers the skills the agent loaded, in invocation
-order, each with its `SKILL.md` body when the trajectory carried it. Both accept
-a `Session` or a raw message list.
+description) from the harness-injected `<available_skills>` block.
+`extract_skill_load_events` recovers every load attempt in trajectory order, and
+`extract_selected_skills` folds those into one row per skill, each with its
+`SKILL.md` body when the trajectory carried it. All accept a `Session` or a raw
+message list.
 
 Skills are not first-class in the trace schema the way tools are: there is no
 `AgentInvocationSpan.available_skills` field, and a skill invocation surfaces as
@@ -17,12 +18,14 @@ decisions about which calls are skill loads. `_patterns` and `_normalize` are th
 literals and primitives the other two share.
 """
 
-from .extractor import extract_selected_skills, parse_available_skills
-from .models import AvailableSkill, InvokedSkill
+from .extractor import extract_selected_skills, extract_skill_load_events, parse_available_skills
+from .models import AvailableSkill, InvokedSkill, SkillLoadEvent
 
 __all__ = [
     "AvailableSkill",
     "InvokedSkill",
+    "SkillLoadEvent",
     "extract_selected_skills",
+    "extract_skill_load_events",
     "parse_available_skills",
 ]
