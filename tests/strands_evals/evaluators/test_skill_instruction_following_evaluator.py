@@ -308,7 +308,9 @@ def test_refused_load_reports_why_nothing_could_be_followed(mock_agent_class):
 
     assert len(result) == 1
     assert result[0].label == "not_applicable"
-    assert result[0].reason == "pdf-processing: the harness refused the load, so no instructions were received"
+    assert result[0].reason == (
+        "pdf-processing: the harness refused the load (skill not found), so no instructions were received"
+    )
     mock_agent_class.assert_not_called()
 
 

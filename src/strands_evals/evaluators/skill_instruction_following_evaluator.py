@@ -5,10 +5,11 @@ from pydantic import BaseModel, Field
 from strands import Agent
 from strands.models.model import Model
 
-from ..extractors.skills import InvokedSkill, extract_selected_skills, serialize_trajectory
+from ..extractors.skills import InvokedSkill, extract_selected_skills
 from ..types.evaluation import NOT_APPLICABLE, EvaluationData, EvaluationOutput, InputT, OutputT
 from .evaluator import Evaluator
 from .prompt_templates.skill_instruction_following import get_template
+from .prompt_templates.trajectory_prompt_template import serialize_trajectory
 
 
 class SkillFollowingScore(str, Enum):
@@ -127,7 +128,10 @@ class SkillInstructionFollowingEvaluator(Evaluator[InputT, OutputT]):
         conflating them hides a broken harness behind what looks like a capture gap.
         """
         if skill.status == "failed":
-            return f"{skill.name}: the harness refused the load, so no instructions were received"
+            # The harness's own message says which refusal it was, and so what to fix: a
+            # misspelled skill name in the agent's call, or a harness that mounted none.
+            refusal = f" ({skill.error})" if skill.error else ""
+            return f"{skill.name}: the harness refused the load{refusal}, so no instructions were received"
         if not skill.body:
             return f"{skill.name}: skill body unavailable"
         return None

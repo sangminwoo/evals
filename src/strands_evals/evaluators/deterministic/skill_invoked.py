@@ -21,11 +21,14 @@ class SkillInvoked(Evaluator[InputT, OutputT]):
         # since the two call for different fixes (a broken harness, or a prompt that never
         # surfaced the skill).
         found = self.skill_name in {s.name for s in selected if s.status == "loaded"}
-        refused = self.skill_name in {s.name for s in selected if s.status == "failed"}
+        refusal = next((s for s in selected if s.name == self.skill_name and s.status == "failed"), None)
         if found:
             reason = f"skill '{self.skill_name}' was invoked"
-        elif refused:
-            reason = f"skill '{self.skill_name}' was requested but the load failed"
+        elif refusal is not None:
+            # Report what the harness said: a check that fails on a misspelled skill name and one
+            # that fails because nothing was mounted call for different fixes.
+            detail = f": {refusal.error}" if refusal.error else ""
+            reason = f"skill '{self.skill_name}' was requested but the load failed{detail}"
         else:
             reason = f"skill '{self.skill_name}' was not invoked"
         return [

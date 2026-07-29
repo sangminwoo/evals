@@ -9,7 +9,6 @@ from strands_evals.extractors import (
     InvokedSkill,
     extract_selected_skills,
     parse_available_skills,
-    serialize_trajectory,
 )
 from strands_evals.types.trace import (
     AgentInvocationSpan,
@@ -34,9 +33,9 @@ def _loaded(name: str, body: str | None) -> InvokedSkill:
     return InvokedSkill(name, body)
 
 
-def _failed(name: str) -> InvokedSkill:
-    """A skill the agent asked for and the harness refused."""
-    return InvokedSkill(name, None, status="failed")
+def _failed(name: str, error: str | None = None) -> InvokedSkill:
+    """A skill the agent asked for and the harness refused, with what the harness said."""
+    return InvokedSkill(name, None, status="failed", error=error)
 
 
 # ---- raw message-list path --------------------------------------------------
@@ -266,7 +265,7 @@ def test_failed_load_is_recorded_as_a_failed_attempt():
     skill and was refused by the harness selected correctly, and dropping the row entirely makes
     that run indistinguishable from one where the agent never reached for a skill at all.
     """
-    assert extract_selected_skills(fx.FAILED_LOAD_MESSAGES) == [_failed("pdf-processing")]
+    assert extract_selected_skills(fx.FAILED_LOAD_MESSAGES) == [_failed("pdf-processing", "skill not found")]
 
 
 def test_nested_failed_load_is_recorded_as_a_failed_attempt():
@@ -283,7 +282,7 @@ def test_nested_failed_load_is_recorded_as_a_failed_attempt():
         },
     ]
 
-    assert extract_selected_skills(messages) == [_failed("pdf-processing")]
+    assert extract_selected_skills(messages) == [_failed("pdf-processing", "skill not found")]
 
 
 def test_string_zero_exit_code_is_successful():
@@ -402,7 +401,7 @@ def test_session_failed_skill_load_is_recorded_as_a_failed_attempt():
         tool_call=ToolCall(name="skills", arguments={"skill_name": "pdf-processing"}, tool_call_id="tu-1"),
         tool_result=ToolResult(content="skill not found", error="error"),
     )
-    assert extract_selected_skills(_session([tool_span])) == [_failed("pdf-processing")]
+    assert extract_selected_skills(_session([tool_span])) == [_failed("pdf-processing", "error")]
 
 
 def test_session_failed_read_of_a_skill_file_is_not_an_invocation():
@@ -642,22 +641,6 @@ def test_session_available_absent_when_no_system_prompt():
     assert parse_available_skills(_session([agent_span])) == []
 
 
-def test_serialize_trajectory_truncates_oversized_runs():
-    """Real runs can exceed any judge context window, so the middle is dropped."""
-    huge = [{"role": "user", "content": [{"text": "x" * 900_000}]}]
-
-    serialized = serialize_trajectory(huge)
-
-    assert len(serialized) < 900_000
-    assert "characters omitted" in serialized
-
-
-def test_serialize_trajectory_leaves_normal_runs_intact():
-    small = [{"role": "user", "content": [{"text": "do pdf"}]}]
-
-    assert "omitted" not in serialize_trajectory(small)
-
-
 def test_google_adk_function_call_shape():
     """Google ADK emits Gemini content parts and nests its payload under response/result."""
     messages = [
@@ -789,7 +772,7 @@ def test_agent_skills_refusal_is_recorded_as_a_failed_load(result_text):
 
     invoked = extract_selected_skills(messages)
 
-    assert invoked == [_failed("pdf-procesing")]
+    assert invoked == [_failed("pdf-procesing", result_text)]
 
 
 @pytest.mark.parametrize("result_text", _AGENT_SKILLS_REFUSALS)
@@ -802,7 +785,35 @@ def test_agent_skills_refusal_is_recorded_as_a_failed_load_on_the_session_path(r
 
     invoked = extract_selected_skills(_session([tool_span]))
 
-    assert invoked == [_failed("pdf-procesing")]
+    assert invoked == [_failed("pdf-procesing", result_text)]
+
+
+def test_refusal_message_distinguishes_a_bad_name_from_an_empty_mount():
+    """Both runs fail the same way; only the harness's message says what to fix.
+
+    A misspelled skill name is the agent's mistake, an empty catalog is the harness's. Without
+    the message both read as "the load failed" and whoever reads the result cannot tell which.
+    """
+    def refused(text: str) -> list[dict]:
+        return [
+            {
+                "role": "assistant",
+                "content": [
+                    {"toolUse": {"toolUseId": "t1", "name": "skills", "input": {"skill_name": "pdf-procesing"}}}
+                ],
+            },
+            {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": [{"text": text}]}}]},
+        ]
+
+    typo = "Skill 'pdf-procesing' not found. Available skills: pdf-processing"
+    empty = "Skill 'pdf-procesing' not found. Available skills: (none)"
+
+    assert extract_selected_skills(refused(typo))[0].error == typo
+    assert extract_selected_skills(refused(empty))[0].error == empty
+
+
+def test_a_loaded_skill_carries_no_refusal_message():
+    assert extract_selected_skills(fx.STRANDS_MESSAGES)[0].error is None
 
 
 def test_a_skill_that_activated_with_no_instructions_still_counts_as_loaded():
@@ -1021,7 +1032,7 @@ def test_skill_refused_on_every_attempt_stays_failed():
         *_load_attempt("2", "pdf-processing", _REFUSED),
     ]
 
-    assert extract_selected_skills(messages) == [_failed("pdf-processing")]
+    assert extract_selected_skills(messages) == [_failed("pdf-processing", "skill not found")]
 
 
 def test_a_later_refusal_does_not_discard_a_recovered_body():

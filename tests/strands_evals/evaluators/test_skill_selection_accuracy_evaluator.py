@@ -89,6 +89,24 @@ def test_prompt_tells_the_judge_a_refused_load_is_not_a_wrong_choice():
     assert "not whether it worked" in prompt
 
 
+def test_prompt_carries_the_harness_refusal_message():
+    """Which refusal it was still bears on the choice.
+
+    A skill name the harness did not recognize is a worse pick than a right one the harness
+    could not mount, and only the refusal text says which happened.
+    """
+    ev = SkillSelectionAccuracyEvaluator()
+
+    prompt = ev._build_prompt(
+        _case("pdf-processing"),
+        focus_skill=InvokedSkill(
+            "pdf-procesing", None, status="failed", error="Skill 'pdf-procesing' not found. Available: pdf-processing"
+        ),
+    )
+
+    assert "The harness said: Skill 'pdf-procesing' not found. Available: pdf-processing" in prompt
+
+
 def test_prompt_abstention_mode():
     ev = SkillSelectionAccuracyEvaluator()
     prompt = ev._build_prompt(_case(None), focus_skill=None)

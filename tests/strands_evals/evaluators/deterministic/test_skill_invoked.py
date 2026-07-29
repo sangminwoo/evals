@@ -58,8 +58,9 @@ def test_refused_load_does_not_count_as_invoked():
 
     assert result[0].score == 0.0
     assert result[0].test_pass is False
-    # Distinguished from never reaching for the skill, which needs a different fix.
-    assert result[0].reason == "skill 'pdf-processing' was requested but the load failed"
+    # Distinguished from never reaching for the skill, which needs a different fix, and carrying
+    # what the harness said so a misspelled name is distinguishable from a harness that mounted none.
+    assert result[0].reason == "skill 'pdf-processing' was requested but the load failed: skill not found"
 
 
 def test_skill_invoked_no_trajectory():

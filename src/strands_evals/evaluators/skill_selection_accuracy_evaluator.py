@@ -5,10 +5,11 @@ from pydantic import BaseModel, Field
 from strands import Agent
 from strands.models.model import Model
 
-from ..extractors.skills import InvokedSkill, extract_selected_skills, parse_available_skills, serialize_trajectory
+from ..extractors.skills import InvokedSkill, extract_selected_skills, parse_available_skills
 from ..types.evaluation import NOT_APPLICABLE, EvaluationData, EvaluationOutput, InputT, OutputT
 from .evaluator import Evaluator
 from .prompt_templates.skill_selection_accuracy import get_template
+from .prompt_templates.trajectory_prompt_template import serialize_trajectory
 
 _ABSTAINED = "abstained"
 
@@ -89,6 +90,10 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
                     "The harness refused the load, so the agent never received the skill. "
                     "Judge whether asking for this skill was the right choice, not whether it worked.\n"
                 )
+                if focus_skill.error:
+                    # The refusal text can still bear on the choice: a name the harness did not
+                    # recognize is a worse pick than a right one the harness could not mount.
+                    decision += f"The harness said: {focus_skill.error}\n"
         return f"{head}{decision}\n{tail}"
 
     def _build_prompt(

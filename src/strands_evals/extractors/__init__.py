@@ -3,7 +3,6 @@ from .skills import (
     InvokedSkill,
     extract_selected_skills,
     parse_available_skills,
-    serialize_trajectory,
 )
 from .trace_extractor import TraceExtractor
 
@@ -12,6 +11,5 @@ __all__ = [
     "AvailableSkill",
     "InvokedSkill",
     "parse_available_skills",
-    "serialize_trajectory",
     "extract_selected_skills",
 ]

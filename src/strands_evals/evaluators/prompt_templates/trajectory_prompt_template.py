@@ -1,0 +1,34 @@
+"""Rendering a trajectory into judge-prompt text."""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from pydantic import BaseModel
+
+from ...types.trace import Session
+
+# Cap on serialized trajectory size in judge prompts, ~150k tokens at 4 chars/token.
+MAX_TRAJECTORY_CHARS = 600_000
+
+
+def serialize_trajectory(trajectory: Session | list[Any] | None, max_chars: int = MAX_TRAJECTORY_CHARS) -> str:
+    """Serialize a trajectory into stable JSON, for use in judge prompts.
+
+    Truncates the middle of long runs: a real trajectory can reach millions of tokens
+    (one read of a large artifact is enough), which overflows any judge context window.
+    The head and tail are kept because skills are loaded early and the outcome lands late.
+    Pass `max_chars=0` to disable.
+    """
+    if trajectory is None:
+        return "(no trajectory)"
+    if isinstance(trajectory, Session):
+        value: Any = trajectory.model_dump(mode="json")
+    else:
+        value = [item.model_dump(mode="json") if isinstance(item, BaseModel) else item for item in trajectory]
+    text = json.dumps(value, indent=2, default=str)
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    keep = max_chars // 2
+    return f"{text[:keep]}\n\n... [{len(text) - 2 * keep} characters omitted] ...\n\n{text[-keep:]}"
