@@ -16,10 +16,17 @@ MAX_TRAJECTORY_CHARS = 600_000
 def serialize_trajectory(trajectory: Session | list[Any] | None, max_chars: int = MAX_TRAJECTORY_CHARS) -> str:
     """Serialize a trajectory into stable JSON, for use in judge prompts.
 
-    Truncates the middle of long runs: a real trajectory can reach millions of tokens
-    (one read of a large artifact is enough), which overflows any judge context window.
-    The head and tail are kept because skills are loaded early and the outcome lands late.
-    Pass `max_chars=0` to disable.
+    The middle of a long run is dropped: a real trajectory can reach millions of tokens (one read
+    of a large artifact is enough), which overflows any judge context window. The head and tail are
+    kept because skills are loaded early and the outcome lands late.
+
+    Args:
+        trajectory: A `Session` or a raw message list, or None.
+        max_chars: Size ceiling for the returned text. Pass 0 to keep the whole trajectory.
+
+    Returns:
+        str: The serialized trajectory, "(no trajectory)" when None, with an inline note naming the
+        character count where the middle was omitted.
     """
     if trajectory is None:
         return "(no trajectory)"

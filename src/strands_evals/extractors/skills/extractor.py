@@ -465,10 +465,13 @@ def _selected_from_list(messages: list[Any]) -> list[InvokedSkill]:
 def parse_available_skills(trajectory: Session | list[Any] | str | None) -> list[AvailableSkill]:
     """Return the skills exposed to the agent (name + description).
 
-    Accepts a `Session`, a raw message list, or a bare prompt string (e.g. a
-    harness's system prompt, which is where the block is injected but which some
-    session mappers store separately from the message list). Returns [] when no
-    `<available_skills>` block is found.
+    Args:
+        trajectory: A `Session`, a raw message list, or a bare prompt string (e.g. a harness's
+            system prompt, which is where the block is injected but which some session mappers
+            store separately from the message list).
+
+    Returns:
+        list: The advertised skills, or [] when no `<available_skills>` block is found.
     """
     if isinstance(trajectory, Session):
         return _available_from_session(trajectory)
@@ -482,10 +485,15 @@ def parse_available_skills(trajectory: Session | list[Any] | str | None) -> list
 
 
 def extract_selected_skills(trajectory: Session | list[Any] | None) -> list[InvokedSkill]:
-    """Return the skills the agent loaded, in invocation order.
+    """Return the skills the agent selected, in invocation order.
 
-    Accepts a `Session` or a raw message list. Each `InvokedSkill` carries the
-    `SKILL.md` body when the trajectory surfaced it, else `None`.
+    Args:
+        trajectory: A `Session` or a raw message list.
+
+    Returns:
+        list: One `InvokedSkill` per selection, carrying the `SKILL.md` body when the trajectory
+        surfaced it (else `None`) and `status="failed"` with the harness's message when the load
+        was refused.
     """
     if isinstance(trajectory, Session):
         return _selected_from_session(trajectory)
