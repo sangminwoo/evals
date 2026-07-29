@@ -794,6 +794,7 @@ def test_refusal_message_distinguishes_a_bad_name_from_an_empty_mount():
     A misspelled skill name is the agent's mistake, an empty catalog is the harness's. Without
     the message both read as "the load failed" and whoever reads the result cannot tell which.
     """
+
     def refused(text: str) -> list[dict]:
         return [
             {
