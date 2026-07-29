@@ -18,7 +18,6 @@ from ...types.trace import (
     Session,
     ToolExecutionSpan,
 )
-from . import adapters
 from ._normalize import (
     _as_dict,
     _body_from_result,
@@ -43,6 +42,8 @@ from ._patterns import (
     _SHELL_TOOL_NAMES,
     _SHELL_WRAPPER,
 )
+from .adapters._common import ToolResultBlock, _iter_indexed_blocks
+from .adapters.registry import _tool_call, _tool_result
 from .models import AvailableSkill, InvokedSkill, SkillLoadEvent
 
 logger = logging.getLogger(__name__)
@@ -378,13 +379,11 @@ def _is_discovery_tool_name(name: str) -> bool:
 
 def _available_from_list(messages: list[Any]) -> list[AvailableSkill]:
     """Parse trusted system catalogs and skill-discovery tool results."""
-    indexed_blocks = adapters._iter_indexed_blocks(messages)
+    indexed_blocks = _iter_indexed_blocks(messages)
     discovery_ids = {
         call.call_id
         for _, _, block in indexed_blocks
-        if (call := adapters._tool_call(block)) is not None
-        and _is_discovery_tool_name(call.name)
-        and call.call_id is not None
+        if (call := _tool_call(block)) is not None and _is_discovery_tool_name(call.name) and call.call_id is not None
     }
 
     for msg in messages:
@@ -471,11 +470,11 @@ def _events_from_list(messages: list[Any]) -> list[SkillLoadEvent]:
         list: One event per attempt, `position` being the index in `messages` the attempt was
         found at. An attempt whose result the list never carries is reported as "attempted".
     """
-    indexed_blocks = adapters._iter_indexed_blocks(messages)
-    results_by_id: dict[str, adapters.ToolResultBlock] = {}
-    unkeyed_results: list[tuple[int, adapters.ToolResultBlock]] = []
+    indexed_blocks = _iter_indexed_blocks(messages)
+    results_by_id: dict[str, ToolResultBlock] = {}
+    unkeyed_results: list[tuple[int, ToolResultBlock]] = []
     for result_index, _, block in indexed_blocks:
-        parsed_result = adapters._tool_result(block)
+        parsed_result = _tool_result(block)
         if parsed_result is None:
             continue
         if parsed_result.call_id is not None:
@@ -487,7 +486,7 @@ def _events_from_list(messages: list[Any]) -> list[SkillLoadEvent]:
     # directly. Without that bound the next unclaimed result wins, and an unrelated tool's output
     # in between is attributed to the skill: the adherence judge then scores the agent against a
     # weather report instead of the skill's steps.
-    call_indices = sorted({index for index, _, block in indexed_blocks if adapters._tool_call(block) is not None})
+    call_indices = sorted({index for index, _, block in indexed_blocks if _tool_call(block) is not None})
 
     out: list[SkillLoadEvent] = []
     used_unkeyed_results: set[int] = set()
@@ -506,7 +505,7 @@ def _events_from_list(messages: list[Any]) -> list[SkillLoadEvent]:
                 )
             continue
 
-        call = adapters._tool_call(block)
+        call = _tool_call(block)
         if call is None:
             continue
         matched_result = results_by_id.get(call.call_id) if call.call_id is not None else None
