@@ -210,6 +210,11 @@ def _skill_name_from_args(tool_name: str, arguments: dict[str, Any]) -> str | No
     if key is None:
         return None
     value = arguments.get(key)
+    # A missing or empty name is a malformed call rather than a selection, and it yields no event:
+    # there is no skill to attribute the attempt to. Harnesses do refuse these for real (the Strands
+    # plugin answers "Error: skill_name is required.", Google ADK answers with an INVALID_ARGUMENTS
+    # error code), but reporting the attempt would mean inventing a skill named "" and counting it
+    # against the agent's selection accuracy, which is worse than not seeing the fumbled call.
     return str(value) if value else None
 
 

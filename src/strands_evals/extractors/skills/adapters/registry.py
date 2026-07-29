@@ -32,6 +32,7 @@ _CALL_ADAPTERS = (
     gemini._gemini_call,
     strands._typed_call,
     claude._anthropic_call,
+    codex._function_call,
     gemini._named_tool_call,
     gemini._args_call,
     openhands._openhands_call,
@@ -42,6 +43,7 @@ _RESULT_ADAPTERS = (
     gemini._gemini_result,
     strands._typed_result,
     claude._anthropic_result,
+    codex._function_call_output,
     codex._event_result,
     openhands._openhands_result,
 )

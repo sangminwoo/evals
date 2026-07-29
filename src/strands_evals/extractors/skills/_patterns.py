@@ -58,7 +58,22 @@ _READ_TOOL_NAMES = {
     "filesystem_read",
     "read_text_file",
 }
-_SHELL_TOOL_NAMES = {"bash", "shell", "terminal", "command", "execute_command", "run_command"}
+_SHELL_TOOL_NAMES = {"bash", "shell", "terminal", "command", "execute_command", "exec_command", "run_command"}
+# Codex wraps shell output in a fixed preamble before the output itself, e.g.
+#     Chunk ID: 92cb1e
+#     Wall time: 0.0631 seconds
+#     Process exited with code 0
+#     Original token count: 63
+#     Output:
+#     ---
+#     name: pdf-processing
+# Leaving the preamble attached would make the skill body start with the wall time, so the
+# frontmatter would not parse and the judge would score the envelope as instructions.
+_CODEX_EXEC_OUTPUT = re.compile(
+    r"\A(?P<preamble>(?:[A-Za-z][A-Za-z ]*:.*\n|Process exited with code\s+-?\d+\n)*?)Output:\n(?P<output>.*)\Z",
+    re.DOTALL,
+)
+_CODEX_EXIT_CODE = re.compile(r"^Process exited with code\s+(?P<code>-?\d+)\s*$", re.MULTILINE)
 _DISCOVERY_TOOL_NAMES = {"list_skills", "search_skills"}
 _FAILED_STATUSES = {"error", "errored", "fail", "failed", "failure", "cancelled", "canceled"}
 # Exit codes that still leave usable output on stdout. 141 is SIGPIPE, which is what a paged read

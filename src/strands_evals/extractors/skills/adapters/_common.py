@@ -40,7 +40,8 @@ def _looks_like_block(value: dict[str, Any]) -> bool:
     return (
         "toolUse" in value
         or "toolResult" in value
-        or value.get("type") in {"tool_use", "tool_result", "text", "command_execution"}
+        or value.get("type")
+        in {"tool_use", "tool_result", "text", "command_execution", "function_call", "function_call_output"}
         or "tool_name" in value
         or ("name" in value and "args" in value)
         or str(value.get("kind", "")).startswith("InvokeSkill")
@@ -58,15 +59,22 @@ def _iter_indexed_blocks(messages: list[Any]) -> list[tuple[int, str | None, dic
         if outer.get("type") == "item.completed" and (codex_item := _as_dict(outer.get("item"))):
             blocks.append((index, None, codex_item))
             continue
-        if outer.get("type") in {"tool_response", "function_response"} or str(outer.get("kind", "")).startswith(
-            "InvokeSkill"
-        ):
+        if outer.get("type") in {
+            "tool_response",
+            "function_response",
+            # Responses API items, as a Codex session rollout records them: the item *is* the
+            # block, with no message envelope around it.
+            "function_call",
+            "function_call_output",
+        } or str(outer.get("kind", "")).startswith("InvokeSkill"):
             blocks.append((index, None, outer))
             continue
 
         message = _as_dict(outer.get("message")) or outer
         role = message.get("role") or outer.get("role")
-        content = message.get("content")
+        # Google GenAI puts the blocks in `parts`, not `content`: a `types.Content` dumps to
+        # `{"role", "parts": [...]}`, which is what Gemini and Google ADK trajectories are made of.
+        content = message.get("content", message.get("parts"))
         if isinstance(content, list):
             blocks.extend(
                 (index, str(role) if role else None, block)

@@ -1,6 +1,8 @@
 """Unit tests for the skill parsing helpers (parse_available_skills, extract_selected_skills)."""
 
+import json
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -1165,3 +1167,137 @@ def test_a_load_is_attributed_to_the_agent_that_made_it_when_the_trace_says_so()
 def test_no_trajectory_yields_no_events():
     assert extract_skill_load_events(None) == []
     assert extract_skill_load_events([]) == []
+
+
+# ---- Captured harness fixtures -----------------------------------------------
+#
+# The shapes above are hand-written from each harness's documented format. These read what the
+# harnesses actually emitted, so a wire format that drifts from the hand-written version fails here
+# rather than in a user's run. See `fixtures/capture_skill_fixtures.py` for how each was captured
+# and which SDK version produced it.
+
+
+def _captured(name: str):
+    """Load a captured fixture by filename stem."""
+    path = Path(__file__).resolve().parent / "fixtures" / f"{name}.json"
+    return json.loads(path.read_text())
+
+
+def _system_prompt_text(prompt) -> str:
+    """The system prompt as text, whether the harness recorded a string or content blocks."""
+    if isinstance(prompt, list):
+        return "\n".join(block.get("text", "") for block in prompt)
+    return prompt or ""
+
+
+@pytest.mark.parametrize(
+    "case, expected",
+    [
+        ("loaded", [("pdf-processing", "loaded")]),
+        # The typo case: the plugin returns a plain string, which `@tool` marks status="success",
+        # so only the text says the load failed.
+        ("typo_refusal", [("pdf-procesing", "failed")]),
+        ("retry_after_refusal", [("pdf-procesing", "failed"), ("pdf-processing", "loaded")]),
+        ("two_skills", [("pdf-processing", "loaded"), ("spreadsheet-analysis", "loaded")]),
+        ("repeated_load", [("pdf-processing", "loaded"), ("pdf-processing", "loaded")]),
+    ],
+)
+def test_the_real_agent_skills_plugin_is_read_as_captured(case, expected):
+    run = _captured("strands_agent_skills")[case]
+    events = extract_skill_load_events(run["messages"])
+    assert [(event.name, event.status) for event in events] == expected
+
+
+def test_the_real_agent_skills_refusal_text_is_carried_not_mistaken_for_a_body():
+    """jjbuck's case, against the plugin's own output rather than a transcription of it."""
+    run = _captured("strands_agent_skills")["typo_refusal"]
+
+    (event,) = extract_skill_load_events(run["messages"])
+    assert event.body is None
+    assert event.error == ("Skill 'pdf-procesing' not found. Available skills: pdf-processing, spreadsheet-analysis")
+    assert extract_selected_skills(run["messages"]) == [_failed("pdf-procesing", event.error)]
+
+
+def test_the_real_agent_skills_catalog_injection_parses():
+    run = _captured("strands_agent_skills")["loaded"]
+    skills = parse_available_skills(_system_prompt_text(run["system_prompt"]))
+    assert [skill.name for skill in skills] == ["pdf-processing", "spreadsheet-analysis"]
+    assert skills[0].description.startswith("Use this skill when the task requires")
+
+
+def test_a_repeated_load_is_two_captured_events_and_one_row():
+    run = _captured("strands_agent_skills")["repeated_load"]
+    assert len(extract_skill_load_events(run["messages"])) == 2
+    assert len(extract_selected_skills(run["messages"])) == 1
+
+
+def test_the_real_claude_code_skill_tool_is_read_as_captured():
+    """Claude Code acknowledges the launch and injects the body as a separate user message."""
+    messages = _captured("claude_code_skill_tool")["messages"]
+
+    (event,) = extract_skill_load_events(messages)
+    assert (event.name, event.status) == ("pdf-processing", "loaded")
+    # The acknowledgement ("Launching skill: pdf-processing") is not the body.
+    assert event.body is not None
+    assert "Identify the PDF file path." in event.body
+
+
+def test_the_real_codex_exec_stream_is_read_as_captured():
+    """`codex exec --json`: a skill load is a shell read, wrapped in an `item.completed` event."""
+    events = _captured("codex_exec_json")["events"]
+
+    (event,) = extract_skill_load_events(events)
+    assert (event.name, event.status) == ("pdf-processing", "loaded")
+    assert event.body is not None
+    assert "Identify the PDF file path." in event.body
+
+
+def test_the_real_codex_session_rollout_is_read_as_captured():
+    """The same run recorded as Responses API items, with Codex's output preamble stripped."""
+    items = _captured("codex_session_rollout")["items"]
+
+    (event,) = extract_skill_load_events(items)
+    assert (event.name, event.status) == ("pdf-processing", "loaded")
+    assert event.body is not None
+    # The preamble Codex prints ahead of the output is not part of the skill body.
+    assert event.body.startswith("---\nname: pdf-processing")
+    assert "Wall time" not in event.body
+
+
+@pytest.mark.parametrize(
+    "case, expected",
+    [
+        ("loaded", [("pdf-processing", "loaded")]),
+        ("not_found", [("pdf-procesing", "failed")]),
+    ],
+)
+def test_the_real_google_adk_load_skill_is_read_as_captured(case, expected):
+    contents = _captured("google_adk_load_skill")[case]["contents"]
+    events = extract_skill_load_events(contents)
+    assert [(event.name, event.status) for event in events] == expected
+
+
+def test_the_real_google_adk_refusal_carries_its_own_message():
+    contents = _captured("google_adk_load_skill")["not_found"]["contents"]
+    (event,) = extract_skill_load_events(contents)
+    assert event.body is None
+    assert event.error == "Skill 'pdf-procesing' not found."
+
+
+@pytest.mark.parametrize(
+    "fixture, case",
+    [
+        ("strands_agent_skills", "empty_name_refusal"),
+        ("google_adk_load_skill", "missing_arg"),
+    ],
+)
+def test_a_call_with_no_skill_name_yields_no_event(fixture, case):
+    """Both harnesses refuse these for real, and neither refusal names a skill to report.
+
+    Deliberate: an event would have to invent a skill named "", which would then be scored as a
+    wrong selection. See `_skill_name_from_args`.
+    """
+    run = _captured(fixture)[case]
+    messages = run.get("messages") or run["contents"]
+    assert extract_skill_load_events(messages) == []
+    assert extract_selected_skills(messages) == []
