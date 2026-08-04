@@ -10,7 +10,7 @@ from strands_evals.evaluators.skill_instruction_following_evaluator import (
     _strip_frontmatter,
 )
 from strands_evals.extractors import extract_selected_skills
-from strands_evals.types.evaluation import EvaluationData
+from strands_evals.types.evaluation import NOT_APPLICABLE, EvaluationData, EvaluationOutput
 
 _MODULE = "strands_evals.evaluators.skill_instruction_following_evaluator.Agent"
 
@@ -348,11 +348,9 @@ def test_each_row_names_the_skill_it_scored(mock_agent_class):
 
 def test_aggregator_drops_not_applicable():
     ev = SkillInstructionFollowingEvaluator()
-    from strands_evals.types.evaluation import EvaluationOutput
-
     rows = [
         EvaluationOutput(score=1.0, test_pass=True, reason="covered", label="pdf-processing"),
-        EvaluationOutput(score=0.0, test_pass=True, reason="no skill invoked", label="not_applicable"),
+        EvaluationOutput(score=0.0, test_pass=True, reason="no skill invoked", label=NOT_APPLICABLE),
     ]
     avg, all_pass, _ = ev.aggregator(rows)
     # the N/A row must not deflate the mean
@@ -360,7 +358,7 @@ def test_aggregator_drops_not_applicable():
     assert all_pass is True
 
     # all-N/A aggregates to a clean pass, not 0-deflated failure
-    only_na = [EvaluationOutput(score=0.0, test_pass=True, reason="no skill invoked", label="not_applicable")]
+    only_na = [EvaluationOutput(score=0.0, test_pass=True, reason="no skill invoked", label=NOT_APPLICABLE)]
     assert ev.aggregator(only_na) == (0.0, True, "no skill invoked")
 
     missing_body = [
@@ -368,7 +366,7 @@ def test_aggregator_drops_not_applicable():
             score=0.0,
             test_pass=True,
             reason="pdf-processing: skill body unavailable",
-            label="not_applicable",
+            label=NOT_APPLICABLE,
         )
     ]
     assert ev.aggregator(missing_body) == (0.0, True, "pdf-processing: skill body unavailable")

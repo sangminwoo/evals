@@ -30,8 +30,28 @@ class TestNotApplicableLabel:
         assert EvaluationReport.is_applicable(mixed[1:]) is False
 
     def test_a_case_with_no_rows_at_all_is_left_in(self):
-        """An evaluator that produced nothing is not the same as one that judged nothing."""
+        """An evaluator that produced nothing is not the same as one that judged nothing.
+
+        "Every row is not-applicable" is vacuously true of no rows, so the reading that drops an
+        all-N/A case would drop this one too. It must not: an evaluator that returned no rows
+        failed to judge rather than declining to, `_default_aggregator` scores that `test_pass`
+        False, and dropping the case would take that failure out of every average.
+        """
         assert EvaluationReport.is_applicable([]) is True
+
+    def test_a_case_with_no_rows_still_counts_toward_the_mean(self):
+        """The consequence of the line above, at the level the number is actually read.
+
+        A case that produced nothing scores 0.0 and that 0.0 is real, so a corpus of one such case
+        and one perfect case averages 0.5. Were the empty case dropped the corpus would report
+        1.0, a clean sweep, with the failure invisible.
+        """
+        judged = [EvaluationOutput(score=1.0, test_pass=True, label="Yes")]
+
+        assert EvaluationReport.calculate_overall_score([0.0, 1.0], [[], judged]) == 0.5
+        # Contrast: a case that declined to judge is dropped, so the mean is the judged case alone.
+        declined = [EvaluationOutput(score=0.0, test_pass=True, label=NOT_APPLICABLE)]
+        assert EvaluationReport.calculate_overall_score([0.0, 1.0], [declined, judged]) == 1.0
 
 
 class TestEvaluationReportFlatten:
