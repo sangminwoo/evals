@@ -25,9 +25,11 @@ from strands_evals.evaluators import (
     TrajectoryEvaluator,
 )
 from strands_evals.evaluators.evaluator import DEFAULT_BEDROCK_MODEL_ID
-from strands_evals.experiment import is_throttling_error
+from strands_evals.evaluators.skill_selection_accuracy_evaluator import SkillSelectionScore
+from strands_evals.experiment import _get_label_from_score, is_throttling_error
 from strands_evals.providers.trace_provider import TraceProvider
 from strands_evals.types import EvaluationData, EvaluationOutput
+from strands_evals.types.evaluation import NOT_APPLICABLE
 from strands_evals.types.trace import (
     AgentInvocationSpan,
     Session,
@@ -1717,6 +1719,25 @@ def test_skill_evaluator_from_dict_round_trip():
         "SkillInvoked",
     ]
     assert restored.evaluators[2].skill_name == "pdf-processing"
+
+
+def test_all_not_applicable_case_is_not_labeled_with_a_verdict():
+    """A case with nothing to judge must not report the score mapping's worst label.
+
+    Its aggregate score is the 0.0 placeholder, which reverse-maps to the mapping's zero-scored
+    label ("No" for selection). That would publish a failing verdict, on the span and in the
+    CloudWatch record, for a run the judge never rated, while `test_pass` on the same rows is
+    True. Passing the rows in lets the label say "not applicable" instead.
+    """
+    evaluator = SkillSelectionAccuracyEvaluator()
+    not_applicable = [EvaluationOutput(score=0.0, test_pass=True, reason="nothing to judge", label=NOT_APPLICABLE)]
+    judged_no = [EvaluationOutput(score=0.0, test_pass=False, reason="wrong pick", label="No")]
+
+    assert _get_label_from_score(evaluator, 0.0, not_applicable) == NOT_APPLICABLE
+    # A real zero-scored verdict still maps to the mapping's label, and so does every existing
+    # caller that passes no rows at all.
+    assert _get_label_from_score(evaluator, 0.0, judged_no) == str(SkillSelectionScore.NO)
+    assert _get_label_from_score(evaluator, 0.0) == str(SkillSelectionScore.NO)
 
 
 def test_deterministic_evaluator_error_isolation():

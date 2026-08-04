@@ -47,7 +47,7 @@ from .evaluators.trajectory_evaluator import TrajectoryEvaluator
 from .telemetry import get_tracer, serialize
 from .telemetry._cloudwatch_logger import _send_to_cloudwatch
 from .types.detector import DiagnosisConfig
-from .types.evaluation import EvaluationData, InputT, OutputT
+from .types.evaluation import NOT_APPLICABLE, EvaluationData, EvaluationOutput, InputT, OutputT
 from .types.evaluation_report import EvaluationReport
 from .types.trace import Session
 from .utils import is_throttling_error
@@ -61,7 +61,11 @@ _INITIAL_RETRY_DELAY = 4
 _MAX_RETRY_DELAY = 240  # 4 minutes
 
 
-def _get_label_from_score(evaluator: Evaluator, score: float) -> str:
+def _get_label_from_score(
+    evaluator: Evaluator,
+    score: float,
+    outputs: list[EvaluationOutput] | None = None,
+) -> str:
     """
     Get the label from score using evaluator's _score_mapping if available.
     If no mapping exists, returns "YES" for scores >= 0.5, "NO" otherwise.
@@ -69,11 +73,17 @@ def _get_label_from_score(evaluator: Evaluator, score: float) -> str:
     Args:
         evaluator: The evaluator instance
         score: The numeric score
-        default_label: Default label to return if provided and no mapping found
+        outputs: The rows the score was aggregated from, when available. A case whose every row
+            was not-applicable has no verdict to report, and its 0.0 is a placeholder rather than
+            a score, so reverse-mapping it would emit the mapping's worst label for a case that
+            was never judged.
 
     Returns:
         The label corresponding to the score
     """
+    if outputs is not None and not EvaluationReport.is_applicable(outputs):
+        return NOT_APPLICABLE
+
     if hasattr(evaluator, "_score_mapping") and evaluator._score_mapping:
         # Create reverse mapping from score to label
         reverse_mapping = {v: k for k, v in evaluator._score_mapping.items()}
@@ -368,7 +378,7 @@ class Experiment(Generic[InputT, OutputT]):
                 ) = await _evaluate_with_retry()
 
                 try:
-                    label = _get_label_from_score(evaluator, aggregate_score)
+                    label = _get_label_from_score(evaluator, aggregate_score, evaluation_outputs)
                 except Exception:
                     label = "UNKNOWN"
 
