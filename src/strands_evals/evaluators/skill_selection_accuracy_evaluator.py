@@ -11,8 +11,6 @@ from .evaluator import Evaluator
 from .prompt_templates.skill_selection_accuracy import get_template
 from .prompt_templates.trajectory_prompt_template import serialize_trajectory
 
-_ABSTAINED = "abstained"
-
 
 class SkillSelectionScore(str, Enum):
     """Binary skill selection appropriateness ratings."""
@@ -31,8 +29,10 @@ class SkillSelectionRating(BaseModel):
 class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
     """Evaluates whether each skill the agent invoked was an appropriate selection.
 
-    Returns one `EvaluationOutput` per invoked skill, or a single row judging the abstention
-    when no skill was invoked.
+    Returns one `EvaluationOutput` per invoked skill. A run that invoked nothing has no
+    selection to judge and yields a single not-applicable row. Whether declining was correct
+    is a question about the whole offered set rather than about any one invocation, so it is
+    out of scope here and belongs to a session-level check.
     """
 
     _score_mapping = {
@@ -76,32 +76,29 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
         return head, tail
 
     @staticmethod
-    def _prompt_for(context: tuple[str, str], focus_skill: InvokedSkill | None) -> str:
-        """Prompt judging one focal decision: invoking `focus_skill`, or abstaining if None."""
+    def _prompt_for(context: tuple[str, str], focus_skill: InvokedSkill) -> str:
+        """Prompt judging one focal decision: whether invoking `focus_skill` was appropriate."""
         head, tail = context
-        if focus_skill is None:
-            decision = "## Decision under evaluation\nThe agent invoked no skill (abstained).\n"
-        else:
-            decision = f"## Decision under evaluation\nThe agent invoked the skill: {focus_skill.name}\n"
-            if focus_skill.status == "failed":
-                # What is being judged is the choice, not the outcome. Without this the judge sees
-                # an error in the trajectory and marks a correct selection wrong for failing.
-                decision += (
-                    "The harness refused the load, so the agent never received the skill. "
-                    "Judge whether asking for this skill was the right choice, not whether it worked.\n"
-                )
-                if focus_skill.error:
-                    # The refusal text can still bear on the choice: a name the harness did not
-                    # recognize is a worse pick than a right one the harness could not mount.
-                    decision += f"The harness said: {focus_skill.error}\n"
+        decision = f"## Decision under evaluation\nThe agent invoked the skill: {focus_skill.name}\n"
+        if focus_skill.status == "failed":
+            # What is being judged is the choice, not the outcome. Without this the judge sees
+            # an error in the trajectory and marks a correct selection wrong for failing.
+            decision += (
+                "The harness refused the load, so the agent never received the skill. "
+                "Judge whether asking for this skill was the right choice, not whether it worked.\n"
+            )
+            if focus_skill.error:
+                # The refusal text can still bear on the choice: a name the harness did not
+                # recognize is a worse pick than a right one the harness could not mount.
+                decision += f"The harness said: {focus_skill.error}\n"
         return f"{head}{decision}\n{tail}"
 
     def _build_prompt(
         self,
         evaluation_case: EvaluationData[InputT, OutputT],
-        focus_skill: InvokedSkill | None,
+        focus_skill: InvokedSkill,
     ) -> str:
-        """Prompt judging one focal decision: invoking `focus_skill`, or abstaining if None."""
+        """Prompt judging one focal decision: whether invoking `focus_skill` was appropriate."""
         return self._prompt_for(self._case_context(evaluation_case), focus_skill)
 
     def _rating_to_output(self, rating: SkillSelectionRating, decision: str) -> EvaluationOutput:
@@ -147,26 +144,28 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
         return cls._not_applicable_row("no trajectory provided", test_pass=False)
 
     @classmethod
-    def _no_catalog_row(cls) -> EvaluationOutput:
-        """No advertised skills and no invocation means there was no selection decision to make.
+    def _no_invocation_row(cls, has_catalog: bool) -> EvaluationOutput:
+        """No invoked skill means no selection decision for this evaluator to judge.
 
-        Judging it either way is wrong: a "Yes" credits the agent for declining an offer it never
-        received, and a "No" penalizes it for the same. This also covers the case where skills were
-        on offer but the trajectory did not carry the catalog, where the right verdict is unknowable
-        rather than favorable.
+        Whether declining was correct depends on the whole offered set, not on any one
+        invocation, so it is a session-level question and out of scope here. The reason
+        still distinguishes the two cases, because "nothing was on offer" and "something was
+        on offer and none was taken" are different facts even when neither is scored.
         """
-        return cls._not_applicable_row("no skills were available to select from", test_pass=True)
+        reason = (
+            "no skill invoked; whether declining was correct is not judged here"
+            if has_catalog
+            else "no skills were available to select from"
+        )
+        return cls._not_applicable_row(reason, test_pass=True)
 
     def evaluate(self, evaluation_case: EvaluationData[InputT, OutputT]) -> list[EvaluationOutput]:
         if evaluation_case.actual_trajectory is None:
             return [self._missing_trajectory_row()]
         invoked = extract_selected_skills(evaluation_case.actual_trajectory)
-        if not invoked and not self._has_catalog(evaluation_case):
-            return [self._no_catalog_row()]
-        context = self._case_context(evaluation_case)
         if not invoked:
-            rating = self._judge(self._prompt_for(context, None))
-            return [self._rating_to_output(rating, decision=_ABSTAINED)]
+            return [self._no_invocation_row(self._has_catalog(evaluation_case))]
+        context = self._case_context(evaluation_case)
         results = []
         for skill in invoked:
             rating = self._judge(self._prompt_for(context, skill))
@@ -177,12 +176,9 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
         if evaluation_case.actual_trajectory is None:
             return [self._missing_trajectory_row()]
         invoked = extract_selected_skills(evaluation_case.actual_trajectory)
-        if not invoked and not self._has_catalog(evaluation_case):
-            return [self._no_catalog_row()]
-        context = self._case_context(evaluation_case)
         if not invoked:
-            rating = await self._judge_async(self._prompt_for(context, None))
-            return [self._rating_to_output(rating, decision=_ABSTAINED)]
+            return [self._no_invocation_row(self._has_catalog(evaluation_case))]
+        context = self._case_context(evaluation_case)
         results = []
         for skill in invoked:
             rating = await self._judge_async(self._prompt_for(context, skill))

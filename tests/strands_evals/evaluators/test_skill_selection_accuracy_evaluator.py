@@ -107,10 +107,12 @@ def test_prompt_carries_the_harness_refusal_message():
     assert "The harness said: Skill 'pdf-procesing' not found. Available: pdf-processing" in prompt
 
 
-def test_prompt_abstention_mode():
+def test_prompt_has_no_abstention_branch():
+    """Selection judges invoked skills only, so no prompt path offers an abstention verdict."""
     ev = SkillSelectionAccuracyEvaluator()
-    prompt = ev._build_prompt(_case(None), focus_skill=None)
-    assert "invoked no skill (abstained)" in prompt
+    prompt = ev._build_prompt(_case("pdf-processing"), focus_skill=InvokedSkill("pdf-processing", "# body"))
+    assert "abstained" not in prompt
+    assert "abstention" not in ev.system_prompt.casefold()
 
 
 @pytest.mark.parametrize(
@@ -159,8 +161,8 @@ def test_evaluate_loops_per_invoked_skill(mock_agent_class):
 
 
 @patch(_MODULE)
-def test_missing_trajectory_is_not_scored_as_abstention(mock_agent_class):
-    """A None trajectory is absent data, so it must not read as a correct abstention."""
+def test_missing_trajectory_is_not_scored(mock_agent_class):
+    """A None trajectory is absent data, so it fails rather than passing as not-applicable."""
     case = EvaluationData(input="do pdf", actual_output="done", actual_trajectory=None)
 
     result = SkillSelectionAccuracyEvaluator().evaluate(case)
@@ -173,7 +175,7 @@ def test_missing_trajectory_is_not_scored_as_abstention(mock_agent_class):
 
 
 @patch(_MODULE)
-def test_abstention_with_no_available_skills_is_not_scored(mock_agent_class):
+def test_no_invocation_without_a_catalog_is_not_scored(mock_agent_class):
     """With nothing on offer and nothing invoked there was no selection decision to judge.
 
     A "Yes" would credit the agent for declining an offer it never received, and a "No" would
@@ -196,7 +198,7 @@ def test_abstention_with_no_available_skills_is_not_scored(mock_agent_class):
 
 @pytest.mark.asyncio
 @patch(_MODULE)
-async def test_abstention_with_no_available_skills_is_not_scored_async(mock_agent_class):
+async def test_no_invocation_without_a_catalog_is_not_scored_async(mock_agent_class):
     case = EvaluationData(input="do pdf", actual_output="done", actual_trajectory=[])
 
     result = await SkillSelectionAccuracyEvaluator().evaluate_async(case)
@@ -246,20 +248,20 @@ def test_refused_load_is_judged_as_a_selection_not_an_abstention(mock_agent_clas
 
 
 @patch(_MODULE)
-def test_evaluate_abstention_single_row(mock_agent_class):
-    # No skill invoked: one row judging the abstention, named as such in `reason`.
-    mock_agent = Mock()
-    mock_result = Mock()
-    mock_result.structured_output = SkillSelectionRating(reasoning="none fit", score=SkillSelectionScore.YES)
-    mock_agent.return_value = mock_result
-    mock_agent_class.return_value = mock_agent
+def test_no_invocation_with_a_catalog_is_not_scored(mock_agent_class):
+    """Skills were on offer and none was taken: still not this evaluator's decision to judge.
 
+    Whether declining was correct depends on the whole offered set, so it is a session-level
+    question. The reason distinguishes this from the nothing-on-offer case.
+    """
     result = SkillSelectionAccuracyEvaluator().evaluate(_case(None))
+
     assert len(result) == 1
-    assert result[0].score == 1.0
-    assert result[0].label == "Yes"
-    assert result[0].reason == "abstained: none fit"
-    assert mock_agent.call_count == 1
+    assert result[0].label == "not_applicable"
+    assert result[0].score == 0.0
+    assert result[0].test_pass is True
+    assert result[0].reason == "no skill invoked; whether declining was correct is not judged here"
+    mock_agent_class.assert_not_called()
 
 
 @pytest.mark.asyncio

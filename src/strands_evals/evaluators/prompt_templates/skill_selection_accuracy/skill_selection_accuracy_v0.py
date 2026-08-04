@@ -6,23 +6,16 @@ agent is shown a list of available skills (each with a name and description) and
 if any, to load. You are given:
 - the task the agent was asked to do,
 - the list of available skills (name + description),
-- one decision under evaluation: either a single skill the agent invoked, or the fact that
-  the agent invoked no skill (abstained),
+- one skill the agent invoked, which is the decision under evaluation,
 - the agent's run.
 
 ## Evaluation Question
-Judge only the one decision under evaluation.
-
-If the decision is that the agent invoked a specific skill:
+Judge only the one skill named as the decision under evaluation.
 - "Yes" if that skill's description fits the task (it was a reasonable skill to load).
 - "No" if that skill does not fit the task (an inappropriate pick).
 - On a task that needs several skills, invoking any one skill that genuinely fits is
   appropriate on its own; judge this skill on its own merits, not on whether the agent also
   loaded the other skills it needed.
-
-If the decision is that the agent abstained (invoked no skill):
-- "Yes" if no available skill fits the task (correct abstention).
-- "No" if a relevant skill was available and the agent loaded nothing (a missed skill).
 
 ## Guidelines
 - Judge the selection decision, not how well the agent then executed the skill.

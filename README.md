@@ -532,7 +532,7 @@ from strands_evals.evaluators import (
 )
 
 # Was each invoked skill an appropriate pick? Binary, one result per invoked skill.
-# When no skill was invoked, judges whether abstaining was correct.
+# A run that invoked nothing has no selection to judge and yields a not-applicable row.
 selection_evaluator = SkillSelectionAccuracyEvaluator()
 
 # Did the agent follow the invoked skill's steps? Five-level rating, one result per
