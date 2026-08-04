@@ -1065,6 +1065,52 @@ def test_unkeyed_result_of_an_unrelated_tool_is_not_taken_as_the_skill_body():
     assert extract_selected_skills(messages) == [_loaded("pdf-processing", None)]
 
 
+def test_a_malformed_match_does_not_hide_a_second_reading_of_the_same_call():
+    """Shapes overlap, so one block can be a broken call in one shape and a whole one in another.
+
+    A harness that wraps a `toolUse` and also tags the block `type: "tool_use"` carries the call
+    twice. If the wrapper is truncated, stopping at the first recognizer that matched throws away
+    the flat fields that did survive, and a real skill load reads as no load at all.
+    """
+    messages = [
+        {
+            "toolUse": {"toolUseId": "t1", "name": "skills"},  # no `input`: unusable
+            "type": "tool_use",
+            "id": "t1",
+            "name": "skills",
+            "input": {"skill_name": "pdf-processing"},  # the same call, intact
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "t1", "content": fx.SKILL_BODY}],
+        },
+    ]
+
+    assert extract_selected_skills(messages) == [_loaded("pdf-processing", fx.SKILL_BODY)]
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        pytest.param({"toolUse": {"toolUseId": "t1", "name": "skills"}}, id="bedrock-wrapper"),
+        pytest.param({"tool_name": "skills", "parameters": None}, id="gemini-stream"),
+        pytest.param({"content_type": "tool_use", "name": "skills"}, id="typed-message"),
+    ],
+)
+def test_a_sibling_name_and_args_pair_is_not_read_as_the_broken_call(block):
+    """Recovering a second reading must not become inventing a different call.
+
+    `{"name", "args"}` is the loosest shape recognized, and a block that declares a harness is not
+    it: these are one malformed call, not a valid bare one. The sibling pair here names a real skill
+    tool and a skill the agent never asked for, so reading it would not merely lose the broken call
+    but report the wrong skill as loaded. Reporting no call is the honest answer, so a block that
+    declares a harness is offered only to the recognizers that read tagged shapes.
+    """
+    messages = [{**block, "name": "skills", "args": {"skill_name": "never-requested"}}]
+
+    assert extract_selected_skills(messages) == []
+
+
 # ---- The load-event layer ----------------------------------------------------
 #
 # `extract_selected_skills` reports one row per skill, which is what the judges want. These
