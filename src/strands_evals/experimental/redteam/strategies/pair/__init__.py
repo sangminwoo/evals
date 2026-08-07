@@ -18,6 +18,7 @@ from strands.models.model import Model
 
 from ...utils import _put_model_field
 from ..base import AttackRunResult, AttackStrategy
+from ..target_session import _single_shot_attempts
 from . import pair_v0
 
 if TYPE_CHECKING:
@@ -156,39 +157,42 @@ class PairStrategy(AttackStrategy):
         conversation: list[dict[str, Any]] = []
         last_response = ""
         last_raw_score: int | None = None
-        # PEAK normalized score across turns (a refinement strategy's closest approach is more informative
-        # than the last turn, which may have dipped after a peak).
         best_score: float | None = None
         succeeded = False
         iterations = 0
         target_calls = 0
         parse_failures = 0
 
-        for _ in range(turn_cap):
-            p = gen_refined_prompt(attacker, goal, last_response, last_raw_score)
-            if p is None or not p.strip():
-                parse_failures += 1
-                logger.warning("reason=<empty_prompt> | attacker produced no prompt | ending case early")
-                break
+        # Each P is an independent single-shot: restore the target checkpoint between iterations while
+        # preserving every iteration's tool-use trace.
+        with _single_shot_attempts(target_session) as begin_attempt:
+            for _ in range(turn_cap):
+                p = gen_refined_prompt(attacker, goal, last_response, last_raw_score)
+                if p is None or not p.strip():
+                    parse_failures += 1
+                    logger.warning("reason=<empty_prompt> | attacker produced no prompt | ending case early")
+                    break
 
-            response = target_session.invoke(p)
-            target_calls += 1
-            if not response or not response.strip():
-                logger.warning("reason=<empty_response> | target returned no text | ending case early")
-                break
+                begin_attempt()
+                response = target_session.invoke(p)
+                target_calls += 1
+                if not response or not response.strip():
+                    logger.warning("reason=<empty_response> | target returned no text | ending case early")
+                    break
 
-            iterations += 1
-            conversation.append({"role": "attacker", "content": p})
-            conversation.append({"role": "target", "content": response})
-            last_response = response
+                iterations += 1
+                conversation.append({"role": "attacker", "content": p})
+                conversation.append({"role": "target", "content": response})
+                last_response = response
 
-            turn_score, last_raw_score = success_score(make_judge, goal, response)
-            best_score = turn_score if best_score is None else max(best_score, turn_score)
-            logger.debug("iteration=<%s> score=<%.3f> | pair turn scored", iterations, turn_score)
+                turn_score, last_raw_score = success_score(make_judge, goal, response)
+                # A refinement strategy's closest approach is more informative than a later dip.
+                best_score = turn_score if best_score is None else max(best_score, turn_score)
+                logger.debug("iteration=<%s> score=<%.3f> | pair turn scored", iterations, turn_score)
 
-            if turn_score >= self._success_threshold:
-                succeeded = True
-                break
+                if turn_score >= self._success_threshold:
+                    succeeded = True
+                    break
 
         return AttackRunResult(
             conversation=conversation,

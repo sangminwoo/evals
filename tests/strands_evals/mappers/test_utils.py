@@ -1,5 +1,7 @@
 """Tests for mapper utility functions."""
 
+from datetime import datetime, timezone
+
 from strands_evals.mappers import (
     CloudWatchSessionMapper,
     LangChainOtelSessionMapper,
@@ -9,7 +11,8 @@ from strands_evals.mappers import (
     get_scope_name,
     readable_spans_to_dicts,
 )
-from strands_evals.mappers.utils import join_tool_result_content
+from strands_evals.mappers.utils import bridge_parent_gaps, join_tool_result_content
+from strands_evals.types.trace import AgentInvocationSpan, SpanInfo, ToolCall, ToolExecutionSpan, ToolResult
 
 
 class TestJoinToolResultContent:
@@ -313,3 +316,40 @@ class TestReadableSpansToDicts:
         """Handles empty span list."""
         result = readable_spans_to_dicts([])
         assert result == []
+
+
+def _span_info(span_id: str, parent_span_id: str | None = None) -> SpanInfo:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    return SpanInfo(session_id="s1", span_id=span_id, parent_span_id=parent_span_id, start_time=now, end_time=now)
+
+
+class TestBridgeParentGaps:
+    def test_bridges_to_converted_ancestor(self):
+        """Tool pointing to unconverted span gets reparented to the nearest converted ancestor."""
+        agent = AgentInvocationSpan(
+            span_info=_span_info("agent", None), user_prompt="hi", agent_response="hey", available_tools=[]
+        )
+        tool = ToolExecutionSpan(
+            span_info=_span_info("tool", parent_span_id="call_llm"),
+            tool_call=ToolCall(name="x", arguments={}),
+            tool_result=ToolResult(content="y"),
+        )
+        # call_llm is unconverted but its parent is the converted agent
+        raw_parent_map = {"agent": None, "call_llm": "agent", "tool": "call_llm"}
+
+        bridge_parent_gaps([agent, tool], raw_parent_map)
+
+        assert tool.span_info.parent_span_id == "agent"
+
+    def test_sets_none_when_no_converted_ancestor(self):
+        """Tool whose chain never reaches a converted span gets parent_span_id=None."""
+        tool = ToolExecutionSpan(
+            span_info=_span_info("tool", parent_span_id="orphan"),
+            tool_call=ToolCall(name="x", arguments={}),
+            tool_result=ToolResult(content="y"),
+        )
+        raw_parent_map = {"orphan": "also_gone", "also_gone": None, "tool": "orphan"}
+
+        bridge_parent_gaps([tool], raw_parent_map)
+
+        assert tool.span_info.parent_span_id is None

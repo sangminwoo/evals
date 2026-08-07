@@ -24,6 +24,7 @@ class MultimodalFaithfulnessEvaluator(MultimodalOutputEvaluator):
         reference_suffix: str | None = None,
         uses_environment_state: bool = False,
         name: str | None = None,
+        tools: list | None = None,
     ):
         super().__init__(
             rubric=rubric if rubric is not None else FAITHFULNESS_RUBRIC_V0,
@@ -33,4 +34,5 @@ class MultimodalFaithfulnessEvaluator(MultimodalOutputEvaluator):
             reference_suffix=reference_suffix,
             uses_environment_state=uses_environment_state,
             name=name,
+            tools=tools,
         )

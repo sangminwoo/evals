@@ -46,6 +46,7 @@ REFERENCE COMPARISON:
         reference_suffix: str | None = None,
         uses_environment_state: bool = False,
         name: str | None = None,
+        tools: list | None = None,
     ):
         super().__init__(
             rubric=rubric,
@@ -54,6 +55,7 @@ REFERENCE COMPARISON:
             include_inputs=include_inputs,
             uses_environment_state=uses_environment_state,
             name=name,
+            tools=tools,
         )
         self.reference_suffix = reference_suffix if reference_suffix is not None else self.DEFAULT_REFERENCE_SUFFIX
 

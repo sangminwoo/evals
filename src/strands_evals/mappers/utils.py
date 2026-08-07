@@ -6,10 +6,34 @@ import json
 import logging
 from typing import Any
 
-from .constants import SCOPE_LANGCHAIN_OTEL, SCOPE_STRANDS, SCOPES_OPENINFERENCE_FAMILY
+from ..types.trace import SpanUnion
+from .constants import SCOPE_ADK, SCOPE_LANGCHAIN_OTEL, SCOPE_STRANDS, SCOPES_OPENINFERENCE_FAMILY
 from .session_mapper import SessionMapper
 
 logger = logging.getLogger(__name__)
+
+
+def safe_json_parse(content: Any) -> Any:
+    """Safely parse JSON content, returning the original value on failure.
+
+    If content is already a dict, returns it as-is. If it's a string, attempts
+    JSON parsing and falls back to returning the raw string on decode error.
+    For all other types, returns the value unchanged.
+
+    Args:
+        content: Value to parse — typically a str or dict from span attributes.
+
+    Returns:
+        Parsed dict/list on success, or the original value if parsing fails or is unnecessary.
+    """
+    if isinstance(content, dict):
+        return content
+    if isinstance(content, str):
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            return content
+    return content
 
 
 def join_tool_result_content(content: Any) -> str:
@@ -89,6 +113,7 @@ def detect_otel_mapper(spans: list[Any]) -> SessionMapper:
         >>> session = mapper.map_to_session(spans, "session-123")
     """
     # Import here to avoid circular imports
+    from .adk_otel_session_mapper import ADKOtelSessionMapper
     from .cloudwatch_session_mapper import CloudWatchSessionMapper
     from .langchain_otel_session_mapper import LangChainOtelSessionMapper
     from .openinference_session_mapper import OpenInferenceSessionMapper
@@ -106,6 +131,9 @@ def detect_otel_mapper(spans: list[Any]) -> SessionMapper:
 
         if scope_name in SCOPES_OPENINFERENCE_FAMILY:
             return OpenInferenceSessionMapper()
+
+        if scope_name == SCOPE_ADK:
+            return ADKOtelSessionMapper()
 
         if scope_name == SCOPE_STRANDS:
             # CloudWatch split format puts body on a separate entry from
@@ -194,7 +222,9 @@ def readable_spans_to_dicts(spans: Any) -> list[dict]:
         List of span dictionaries ready for use with mappers
 
     Example:
-        >>> from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        >>> from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        ...     InMemorySpanExporter,
+        ... )
         >>> exporter = InMemorySpanExporter()
         >>> # ... run instrumented code ...
         >>> spans = readable_spans_to_dicts(exporter.get_finished_spans())
@@ -231,3 +261,35 @@ def readable_spans_to_dicts(spans: Any) -> list[dict]:
 
         result.append(span_dict)
     return result
+
+
+def bridge_parent_gaps(
+    converted_spans: list[SpanUnion],
+    raw_parent_map: dict[str, str | None],
+) -> None:
+    """Patch parent_span_id on converted spans to skip unconverted intermediates.
+
+    When a converted span's parent_span_id points to a span that wasn't
+    converted (e.g. execute_event_loop_cycle in Strands SDK, call_llm in ADK),
+    this walks up via raw_parent_map until it finds a converted ancestor — or
+    sets parent_span_id to None if no converted ancestor exists.
+
+    Args:
+        converted_spans: Flat list of converted spans from a single trace.
+        raw_parent_map: span_id -> parent_span_id for ALL raw spans, including
+            unconverted ones.
+    """
+    converted_ids = {s.span_info.span_id for s in converted_spans if s.span_info.span_id}
+    for span in converted_spans:
+        parent_id = span.span_info.parent_span_id
+        if parent_id and parent_id not in converted_ids:
+            visited: set[str] = set()
+            current: str | None = parent_id
+            while current and current not in visited:
+                visited.add(current)
+                if current in converted_ids:
+                    span.span_info.parent_span_id = current
+                    break
+                current = raw_parent_map.get(current)
+            else:
+                span.span_info.parent_span_id = None

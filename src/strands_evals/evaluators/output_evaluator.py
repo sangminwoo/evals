@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Any, cast
 
 from strands import Agent
 from strands.models.model import Model
@@ -20,6 +20,8 @@ class OutputEvaluator(Evaluator[InputT, OutputT]):
         system_prompt: System prompt to guide model behavior.
                     If None, the evaluator will use one of the default template.
         include_inputs: Whether to include inputs to the task in the evaluation or not.
+        tools: Optional tools for the evaluator agent (e.g., domain-specific verification
+                    functions the judge can call). Defaults to None (no tools).
     """
 
     def __init__(
@@ -30,6 +32,7 @@ class OutputEvaluator(Evaluator[InputT, OutputT]):
         include_inputs: bool = True,
         uses_environment_state: bool = False,
         name: str | None = None,
+        tools: list[Any] | None = None,
     ):
         super().__init__(name=name)
         self.rubric = rubric
@@ -37,6 +40,7 @@ class OutputEvaluator(Evaluator[InputT, OutputT]):
         self.include_inputs = include_inputs
         self.system_prompt = system_prompt
         self.uses_environment_state = uses_environment_state
+        self.tools = tools
 
     def _build_prompt(self, evaluation_case: EvaluationData[InputT, OutputT]) -> str | list:
         """Build the evaluation prompt for a test case.
@@ -66,7 +70,9 @@ class OutputEvaluator(Evaluator[InputT, OutputT]):
         Returns:
             The results of the evaluation as EvaluationOutput.
         """
-        evaluator_agent = Agent(model=self.model, system_prompt=self.system_prompt, callback_handler=None)
+        evaluator_agent = Agent(
+            model=self.model, tools=self.tools, system_prompt=self.system_prompt, callback_handler=None
+        )
         evaluation_prompt = self._build_prompt(evaluation_case)
         result = evaluator_agent(evaluation_prompt, structured_output_model=EvaluationOutput)
         return [cast(EvaluationOutput, result.structured_output)]
@@ -81,7 +87,9 @@ class OutputEvaluator(Evaluator[InputT, OutputT]):
         Returns:
             The results of the evaluation as EvaluationOutput.
         """
-        evaluator_agent = Agent(model=self.model, system_prompt=self.system_prompt, callback_handler=None)
+        evaluator_agent = Agent(
+            model=self.model, tools=self.tools, system_prompt=self.system_prompt, callback_handler=None
+        )
         evaluation_prompt = self._build_prompt(evaluation_case)
         result = await evaluator_agent.invoke_async(evaluation_prompt, structured_output_model=EvaluationOutput)
         return [cast(EvaluationOutput, result.structured_output)]
