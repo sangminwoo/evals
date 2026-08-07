@@ -921,6 +921,37 @@ def test_skill_names_differing_only_by_a_dot_stay_separate():
     assert [s.name for s in extract_selected_skills(messages)] == ["data.clean", "data-clean"]
 
 
+def test_a_longer_read_of_the_same_skill_only_wins_if_it_contains_what_was_kept():
+    """The containment rule, on the shape that actually exercises it: two real read verbs.
+
+    A paged read recovers part of a skill, and a later read of the same skill returns unrelated
+    but longer output. Length alone would let the second displace the first, so the judge would be
+    handed stray stdout as the skill's instructions. The kept body has to be a subset of the
+    challenger for it to win.
+    """
+    partial = "---\nname: pdf-processing\n---\n# Real\n1. first step"
+    messages = [
+        {
+            "type": "command_execution",
+            "command": "sed -n '1,5p' /skills/pdf-processing/SKILL.md",
+            "exit_code": 0,
+            "aggregated_output": partial,
+        },
+        {
+            # A read verb, the same skill path, and longer output that does NOT contain `partial`.
+            "type": "command_execution",
+            "command": "cat /skills/pdf-processing/SKILL.md",
+            "exit_code": 0,
+            "aggregated_output": "unrelated stdout that happens to be much longer " * 4,
+        },
+    ]
+
+    invoked = extract_selected_skills(messages)
+
+    assert [s.name for s in invoked] == ["pdf-processing"]
+    assert invoked[0].body == partial
+
+
 def test_longer_unrelated_output_does_not_displace_a_recovered_body():
     """Only a superset of what was already recovered wins, so stray stdout cannot take over."""
     real_body = "---\nname: pdf-processing\n---\n# Real\n1. step"

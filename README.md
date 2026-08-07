@@ -543,9 +543,13 @@ following_evaluator = SkillInstructionFollowingEvaluator()
 invoked_check = SkillInvoked(skill_name="pdf-processing")
 ```
 
-Both judges read the trajectory only, so any harness that emits one works: pass a `Session`
-or a raw message list as `actual_trajectory`. The skill signals are recovered by
-`parse_available_skills` and `extract_selected_skills` from `strands_evals.extractors`.
+Both judges read the trajectory only: pass a `Session` or a raw message list as
+`actual_trajectory`. Skill signals are recognized for the Strands `AgentSkills` plugin, Claude
+Code, Codex, Gemini CLI, OpenHands, and Google ADK, plus the generic case of an agent reading a
+`SKILL.md` from disk. A harness whose skill calls match none of those yields empty results rather
+than an error, so confirm `parse_available_skills(trajectory)` returns your skills before trusting
+a score. The signals are recovered by `parse_available_skills` and `extract_selected_skills` from
+`strands_evals.extractors`.
 
 ### Multimodal Evaluation (MLLM-as-a-Judge)
 

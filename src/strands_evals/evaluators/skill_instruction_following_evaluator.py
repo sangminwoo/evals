@@ -26,6 +26,11 @@ class SkillFollowingScore(str, Enum):
     NOT_FOLLOWED = "Not Followed"
 
 
+# The fields the AgentSkills plugin generates after the skill's own text, used to tell its runtime
+# block apart from a Markdown rule inside real instructions.
+_HARNESS_METADATA_FIELDS = ("Location:", "Allowed tools:", "Compatibility:", "Available resources:")
+
+
 def _strip_frontmatter(body: str) -> str:
     """Drop a leading YAML frontmatter block (`---\\n ... \\n---`) so the judge sees only steps.
 
@@ -39,6 +44,31 @@ def _strip_frontmatter(body: str) -> str:
     for i in range(1, len(lines)):
         if lines[i].strip() == "---":
             return "\n".join(lines[i + 1 :]).lstrip("\n")
+    return body
+
+
+def _strip_harness_metadata(body: str) -> str:
+    """Drop the runtime block the harness appends after the skill's own instructions.
+
+    The Strands AgentSkills plugin ends a filesystem-skill result with a `---` rule followed by
+    lines it generated rather than the skill author: `Location:`, `Allowed tools:`,
+    `Compatibility:`, and an `Available resources:` list. The prompt labels this whole string
+    "SKILL.md instructions", so a judge can read `Available resources: scripts/extract.py` as a
+    prescribed step nobody wrote, or `Allowed tools:` as a constraint from the skill.
+
+    Keyed on those field names rather than on the `---` alone, because a rule is legal Markdown
+    inside real instructions and splitting on it would truncate them.
+    """
+    marker = "\n---\n"
+    index = body.rfind(marker)
+    if index == -1:
+        return body
+    tail = body[index + len(marker) :]
+    if not tail.strip():
+        return body
+    first = tail.lstrip().split("\n", 1)[0]
+    if any(first.startswith(field) for field in _HARNESS_METADATA_FIELDS):
+        return body[:index].rstrip("\n")
     return body
 
 
@@ -137,7 +167,7 @@ class SkillInstructionFollowingEvaluator(Evaluator[InputT, OutputT]):
         return None
 
     def _build_prompt(self, skill: InvokedSkill, evaluation_case: EvaluationData[InputT, OutputT]) -> str:
-        body = _strip_frontmatter(skill.body or "")
+        body = _strip_harness_metadata(_strip_frontmatter(skill.body or ""))
         return (
             f"## Skill: {skill.name}\n\n"
             f"## SKILL.md instructions\n{body}\n\n"

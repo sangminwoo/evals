@@ -38,4 +38,12 @@ def serialize_trajectory(trajectory: Session | list[Any] | None, max_chars: int 
     if max_chars <= 0 or len(text) <= max_chars:
         return text
     keep = max_chars // 2
-    return f"{text[:keep]}\n\n... [{len(text) - 2 * keep} characters omitted] ...\n\n{text[-keep:]}"
+    # The note says what a judge should infer from the gap, not just that there is one. The
+    # instruction-following rubric offers "skipped" for a step with no visible evidence, so a long
+    # but correct run would otherwise be marked down for the evidence that fell in the middle.
+    return (
+        f"{text[:keep]}\n\n"
+        f"... [{len(text) - 2 * keep} characters omitted; evidence for a step may lie in this gap, "
+        f"so do not treat a step as skipped solely because nothing here shows it] ...\n\n"
+        f"{text[-keep:]}"
+    )

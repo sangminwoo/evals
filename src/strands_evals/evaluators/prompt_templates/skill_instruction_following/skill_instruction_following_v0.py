@@ -32,6 +32,9 @@ nearly all skipped is "Not Followed").
 - If the skill has no clearly enumerable steps, treat its core instructions as the steps.
 - If the skill body prescribes nothing at all (it is reference material rather than instructions),
   return an empty step list rather than inventing steps.
+- A skill written as a decision tree prescribes one path per run, not every branch. List only the
+  steps on the path this run's situation called for; leave out a branch the run correctly did not
+  enter rather than listing it as skipped.
 
 ## Output Format
 Provide, for each step, its status (covered / partial / skipped) with a short evidence note;

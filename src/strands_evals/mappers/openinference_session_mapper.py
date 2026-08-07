@@ -698,6 +698,11 @@ class OpenInferenceSessionMapper(SessionMapper):
             event_name = event.get("event_name", "")
             if event_name in SCOPES_OPENINFERENCE_FAMILY:
                 body = event.get("body", {})
+                if not isinstance(body, dict):
+                    # This path is now walked for every span, to reach the system prompt, so a
+                    # malformed body here would raise and cost the caller the whole span rather
+                    # than just its messages. Matches `cloudwatch_parser`'s own guard.
+                    continue
                 input_group = body.get("input", {})
                 output_group = body.get("output", {})
                 input_msgs = input_group.get("messages", [])

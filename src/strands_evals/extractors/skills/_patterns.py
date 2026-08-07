@@ -86,11 +86,12 @@ _ACKNOWLEDGEMENT = re.compile(
     # and mistaking one for the body would have the judge score a status line as instructions.
     # The optional group is the skill name some harnesses interpose, e.g. the Strands
     # AgentSkills plugin's "Skill 'x' activated (no instructions available).".
-    # Matched without DOTALL so that a body whose first line is an acknowledgement is kept:
-    # only a result that is nothing but the status line is discarded.
+    # Anchored to a single line, and deliberately not with `$`/`.*`: `[^\n]*\Z` is what keeps a
+    # body whose first line is an acknowledgement. `\s*` matches newlines, so a trailing `\s*.*$`
+    # reaches past the first line and discards a short real body along with its status line.
     r"^(?:(?:Launching|Loading|Activating|Loaded|Activated)\s+skill"
-    r"|skill\s+(?:'[^']*'|\"[^\"]*\"|[\w.-]+)?\s*(?:activated|loaded|launched))"
-    r"\b(?:\s*[:.]?\s*.*)?$",
+    r"|skill\s+(?:'[^']*'|\"[^\"]*\"|[\w.-]+)?[ \t]*(?:activated|loaded|launched))"
+    r"\b(?:[ \t]*[:.]?[^\n]*)?\Z",
     re.IGNORECASE,
 )
 _LOAD_ERROR = re.compile(
@@ -99,13 +100,14 @@ _LOAD_ERROR = re.compile(
     # and `@tool` reports a plain string return as `status="success"`, so `_result_failed` sees
     # nothing wrong and the judge would be handed "Skill 'x' not found. Available skills: ..."
     # as the instructions the agent was supposed to follow.
-    # Matched without DOTALL, like `_ACKNOWLEDGEMENT`: only a result that is nothing but the
-    # status line is discarded, so a multi-line body is never thrown away over its first line.
+    # Anchored to a single line, like `_ACKNOWLEDGEMENT` and for the same reason: a refusal-shaped
+    # first line must not carry away the real body that follows it. Reporting that body's skill as
+    # a failed load is the worse half of the bug, since the harness did activate it.
     r"^(?:"
     r"error\s*:\s*skill_name\s+is\s+required"
     r"|skill\s+(?:'[^']*'|\"[^\"]*\"|[\w.-]+)\s+(?:was\s+|is\s+)?not\s+found"
     r"|(?:unknown|unrecognized)\s+skill\b"
     r"|no\s+such\s+skill\b"
-    r")\s*[:.]?\s*.*$",
+    r")[ \t]*[:.]?[^\n]*\Z",
     re.IGNORECASE,
 )

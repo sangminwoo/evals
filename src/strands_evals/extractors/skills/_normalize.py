@@ -163,9 +163,18 @@ def _last_path_segment(path: str) -> str:
 
 
 def _skill_name_from_path(path: str) -> str:
+    """The directory a `SKILL.md` sits in, which is the skill's name by convention.
+
+    Returns "" when the path has no usable parent directory. A bare `SKILL.md` or `./SKILL.md`
+    names no skill, and answering `SKILL.md` or `.` would put a name that is wrong on its face in
+    front of the judge. Callers treat the empty result as "not a skill read".
+    """
     normalized = path.replace("\\", "/").rstrip("/")
     parts = normalized.split("/")
-    return parts[-2] if len(parts) >= 2 else normalized
+    if len(parts) < 2:
+        return ""
+    parent = parts[-2]
+    return "" if parent in {"", ".", ".."} else parent
 
 
 def _canonical_skill_key(name: str) -> str:
@@ -188,6 +197,10 @@ def _skill_name_from_body(body: str, path: str) -> str:
     read from arbitrary on-disk files, so malformed frontmatter is expected;
     `yaml` raises `YAMLError` (not a `ValueError`) on bad structure. Both
     fall back to the directory-derived name rather than aborting extraction.
+
+    Returns "" when neither source yields a name, which callers treat as "not a skill read". A
+    file literally named `SKILL.md` with no frontmatter and no parent directory carries nothing
+    that identifies a skill, and any name invented for it would be wrong.
     """
     try:
         return Skill.from_content(body).name

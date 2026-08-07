@@ -33,15 +33,19 @@ class EvaluationReport(BaseModel):
     def is_applicable(outputs: list[EvaluationOutput]) -> bool:
         """Whether a case's rows carry a verdict, so its score belongs in an average.
 
-        A case is dropped only when it produced at least one row and every row was
-        not-applicable. One judged row is enough to make the case's score a real number.
+        A case is dropped only when every row both declined to judge and passed. One judged row is
+        enough to make the case's score a real number.
 
-        No rows at all is applicable, not vacuously not-applicable. An evaluator that returned
-        nothing did not decline to judge; it failed to, and `_default_aggregator` scores that
-        `(0.0, test_pass=False)`. Dropping the case would take that failure out of every average
-        and report the run as better than it was, so the 0.0 is kept and counted.
+        `test_pass` is what separates the two things a not-applicable row can mean. Declining to
+        judge passes and is droppable: nothing was on offer, so there is no verdict to average.
+        Failing to judge does not pass, and dropping it would take a real failure out of every
+        average and report the run as better than it was. Both evaluators emit the second shape for
+        a missing trajectory.
+
+        No rows at all is applicable for the same reason. An evaluator that returned nothing failed
+        to judge rather than declining to, and `_default_aggregator` scores that `test_pass=False`.
         """
-        return not outputs or any(not output.not_applicable for output in outputs)
+        return not outputs or any(not output.not_applicable or not output.test_pass for output in outputs)
 
     @classmethod
     def calculate_overall_score(

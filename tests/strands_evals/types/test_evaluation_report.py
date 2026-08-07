@@ -53,6 +53,20 @@ class TestNotApplicableLabel:
         declined = [EvaluationOutput(score=0.0, test_pass=True, label=NOT_APPLICABLE)]
         assert EvaluationReport.calculate_overall_score([0.0, 1.0], [declined, judged]) == 1.0
 
+    def test_a_case_that_failed_to_judge_is_not_droppable(self):
+        """The shape both evaluators emit for a missing trajectory, which is not a clean pass.
+
+        `test_pass` is what separates declining to judge from failing to. Dropping a
+        not-applicable row without reading it would take a real failure out of the mean and report
+        a run that never produced a verdict as a clean sweep. `actual_trajectory` defaults to None,
+        so this is reachable whenever one case fails to capture a trajectory.
+        """
+        judged = [EvaluationOutput(score=1.0, test_pass=True, label="Yes")]
+        failed = [EvaluationOutput(score=0.0, test_pass=False, label=NOT_APPLICABLE, reason="no trajectory provided")]
+
+        assert EvaluationReport.is_applicable(failed) is True
+        assert EvaluationReport.calculate_overall_score([0.0, 1.0], [failed, judged]) == 0.5
+
 
 class TestEvaluationReportFlatten:
     """Tests for the flatten() classmethod."""

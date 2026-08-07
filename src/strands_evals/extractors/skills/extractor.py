@@ -230,10 +230,11 @@ def _events_from_session(session: Session) -> list[SkillLoadEvent]:
                 continue
             read_path = _skill_read_path(span.tool_call.name, span.tool_call.arguments)
             body = _body_from_result(span.tool_result.content)
-            if read_path and body:
+            name = _skill_name_from_body(body, read_path) if read_path and body else ""
+            if name:
                 out.append(
                     SkillLoadEvent(
-                        name=_skill_name_from_body(body, read_path),
+                        name=name,
                         status="loaded",
                         body=body,
                         call_id=call_id,
@@ -494,10 +495,12 @@ def _events_from_list(messages: list[Any]) -> list[SkillLoadEvent]:
         if block.get("type") == "command_execution":
             command = block.get("command")
             body = _body_from_result(block)
-            if isinstance(command, str) and (path := _shell_read_skill_path(command)) and body:
+            path = _shell_read_skill_path(command) if isinstance(command, str) else None
+            name = _skill_name_from_body(body, path) if path and body else ""
+            if name:
                 out.append(
                     SkillLoadEvent(
-                        name=_skill_name_from_body(body, path),
+                        name=name,
                         status="loaded",
                         body=body,
                         position=message_index,
@@ -554,10 +557,14 @@ def _events_from_list(messages: list[Any]) -> list[SkillLoadEvent]:
             continue
 
         read_path = _skill_read_path(call.name, call.arguments)
-        if read_path and matched_result is not None and not matched_result.refused and matched_result.body:
+        if read_path is None or matched_result is None or matched_result.refused or not matched_result.body:
+            continue
+        # An unnamed read is not a skill load: see `_skill_name_from_body`.
+        name = _skill_name_from_body(matched_result.body, read_path)
+        if name:
             out.append(
                 SkillLoadEvent(
-                    name=_skill_name_from_body(matched_result.body, read_path),
+                    name=name,
                     status="loaded",
                     body=matched_result.body,
                     call_id=call.call_id,
