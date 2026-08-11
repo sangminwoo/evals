@@ -9,6 +9,7 @@ import pytest
 from strands_evals.extractors import (
     AvailableSkill,
     InvokedSkill,
+    advertised_a_catalog,
     extract_selected_skills,
     extract_skill_load_events,
     parse_available_skills,
@@ -107,6 +108,30 @@ def test_near_miss_is_not_an_invocation():
 def test_empty_messages():
     assert parse_available_skills(fx.EMPTY_MESSAGES) == []
     assert extract_selected_skills(fx.EMPTY_MESSAGES) == []
+
+
+def test_a_harness_that_advertised_nothing_is_not_a_harness_that_recorded_nothing():
+    """`parse_available_skills` returns [] for two different runs, and callers must tell them apart.
+
+    A harness that mounted no skills said so; the Strands plugin emits the block with
+    "No skills are currently available." A harness that never records the offered set said
+    nothing at all, which is the Claude Code and Claude Agent SDK case. Showing a judge an empty
+    set for the second one invites it to conclude the invoked skill did not exist.
+    """
+    advertised_none = [
+        {"role": "system", "content": "<available_skills>\nNo skills are currently available.\n</available_skills>"}
+    ]
+
+    assert parse_available_skills(advertised_none) == []
+    assert parse_available_skills(fx.EMPTY_MESSAGES) == []
+    # Same parse result, different runs.
+    assert advertised_a_catalog(advertised_none) is True
+    assert advertised_a_catalog(fx.EMPTY_MESSAGES) is False
+
+
+def test_a_populated_catalog_counts_as_advertised():
+    assert advertised_a_catalog(fx.STRANDS_MESSAGES) is True
+    assert advertised_a_catalog(None) is False
 
 
 def test_multiple_invocations_in_order():

@@ -18,11 +18,17 @@ decisions about which calls are skill loads. `_patterns` and `_normalize` are th
 literals and primitives the other two share.
 """
 
-from .extractor import extract_selected_skills, extract_skill_load_events, parse_available_skills
+from .extractor import (
+    advertised_a_catalog,
+    extract_selected_skills,
+    extract_skill_load_events,
+    parse_available_skills,
+)
 from .models import AvailableSkill, InvokedSkill, SkillLoadEvent
 
 __all__ = [
     "AvailableSkill",
+    "advertised_a_catalog",
     "InvokedSkill",
     "SkillLoadEvent",
     "extract_selected_skills",

@@ -32,6 +32,8 @@ from ._normalize import (
     _skill_path_from_text,
 )
 from ._patterns import (
+    _AVAILABLE_BLOCK,
+    _AVAILABLE_MARKDOWN,
     _CLAUDE_BASE_DIR,
     _DISCOVERY_TOOL_NAMES,
     _READ_TOOL_NAMES,
@@ -596,6 +598,58 @@ def parse_available_skills(trajectory: Session | list[Any] | str | None) -> list
         return _available_from_list(trajectory)
     if trajectory is not None:
         logger.debug("type=<%s> | unsupported trajectory type for available skills", type(trajectory).__name__)
+    return []
+
+
+def advertised_a_catalog(trajectory: Session | list[Any] | str | None) -> bool:
+    """Whether the run recorded an available-skills block at all, empty or not.
+
+    `parse_available_skills` returns [] for two different runs: one where the harness advertised
+    no skills, and one where the harness never records what it offered. Callers that show the
+    offered set to a judge need to tell those apart, because an empty set is a claim about the run
+    while a missing one is a gap in the telemetry.
+
+    Args:
+        trajectory: A `Session`, a raw message list, or a bare prompt string.
+
+    Returns:
+        bool: True when a block was present, whether or not it listed any skills.
+    """
+    for text in _catalog_texts(trajectory):
+        if _AVAILABLE_BLOCK.search(text) or _AVAILABLE_MARKDOWN.search(text):
+            return True
+    return False
+
+
+def _catalog_texts(trajectory: Session | list[Any] | str | None) -> list[str]:
+    """Every place a harness is known to put the available-skills block."""
+    if trajectory is None:
+        return []
+    if isinstance(trajectory, str):
+        return [trajectory]
+    if isinstance(trajectory, Session):
+        return [
+            span.system_prompt
+            for trace in trajectory.traces
+            for span in trace.spans
+            if isinstance(span, AgentInvocationSpan) and span.system_prompt
+        ]
+    if isinstance(trajectory, list):
+        texts: list[str] = []
+        for message in trajectory:
+            outer = _as_dict(message)
+            if outer is None:
+                continue
+            content = outer.get("content")
+            if isinstance(content, str):
+                texts.append(content)
+            elif isinstance(content, list):
+                texts.extend(
+                    block["text"]
+                    for item in content
+                    if (block := _as_dict(item)) is not None and isinstance(block.get("text"), str)
+                )
+        return texts
     return []
 
 

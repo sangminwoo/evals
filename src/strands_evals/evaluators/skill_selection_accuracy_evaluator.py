@@ -5,7 +5,12 @@ from pydantic import BaseModel, Field
 from strands import Agent
 from strands.models.model import Model
 
-from ..extractors.skills import InvokedSkill, extract_selected_skills, parse_available_skills
+from ..extractors.skills import (
+    InvokedSkill,
+    advertised_a_catalog,
+    extract_selected_skills,
+    parse_available_skills,
+)
 from ..types.evaluation import NOT_APPLICABLE, EvaluationData, EvaluationOutput, InputT, OutputT
 from .evaluator import Evaluator
 from .prompt_templates.skill_selection_accuracy import get_template
@@ -56,8 +61,20 @@ class SkillSelectionAccuracyEvaluator(Evaluator[InputT, OutputT]):
         self.aggregator = self._aggregate_dropping_na
 
     def _available_str(self, evaluation_case: EvaluationData[InputT, OutputT]) -> str:
+        """The offered skills as the judge sees them, or why the list is empty.
+
+        The two empty cases have to read differently. A harness that advertises no skills is a
+        fact about the run, and "none" is the honest rendering. A harness that never records what
+        it offered is a gap in the telemetry, and rendering it as an empty set invites the judge to
+        conclude the invoked skill did not exist and mark a correct pick wrong. Claude Code and the
+        Claude Agent SDK never emit the block, so that is the common case, not a corner one.
+        """
         available = parse_available_skills(evaluation_case.actual_trajectory)
-        return "\n".join(f"- {s.name}: {s.description}" for s in available) if available else "(none listed)"
+        if available:
+            return "\n".join(f"- {s.name}: {s.description}" for s in available)
+        if advertised_a_catalog(evaluation_case.actual_trajectory):
+            return "(none: this harness advertised no skills)"
+        return "(not recorded by this harness)"
 
     def _has_catalog(self, evaluation_case: EvaluationData[InputT, OutputT]) -> bool:
         return bool(parse_available_skills(evaluation_case.actual_trajectory))

@@ -71,6 +71,50 @@ def test_prompt_focuses_on_one_invoked_skill():
     assert "report.pdf" in prompt
 
 
+def test_prompt_says_an_unrecorded_catalog_was_not_recorded():
+    """An empty list is a claim about the run; a missing one is a gap in the telemetry.
+
+    Claude Code and the Claude Agent SDK never emit the offered set, so rendering it as an empty
+    collection lets the judge reason that the invoked skill did not exist and mark a correct pick
+    wrong. Naming the reason removes that inference.
+    """
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "t0", "name": "skills", "input": {"skill_name": "pdf-processing"}}}],
+        },
+        {"role": "user", "content": [{"toolResult": {"toolUseId": "t0", "content": [{"text": "# Skill body"}]}}]},
+    ]
+    case = EvaluationData(input="Extract text from report.pdf", actual_output="done", actual_trajectory=messages)
+
+    prompt = SkillSelectionAccuracyEvaluator()._build_prompt(case, focus_skill=InvokedSkill("pdf-processing", "# body"))
+
+    assert "(not recorded by this harness)" in prompt
+    assert "[]" not in prompt
+
+
+def test_prompt_says_none_when_the_harness_advertised_an_empty_catalog():
+    """The other empty case, which must not read as missing telemetry.
+
+    A harness that mounted no skills did record its offered set, and "none" is the honest
+    rendering. The Strands plugin emits the block with this exact wording.
+    """
+    messages = [
+        {"role": "system", "content": "<available_skills>\nNo skills are currently available.\n</available_skills>"},
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "t0", "name": "skills", "input": {"skill_name": "pdf-processing"}}}],
+        },
+        {"role": "user", "content": [{"toolResult": {"toolUseId": "t0", "content": [{"text": "# Skill body"}]}}]},
+    ]
+    case = EvaluationData(input="Extract text from report.pdf", actual_output="done", actual_trajectory=messages)
+
+    prompt = SkillSelectionAccuracyEvaluator()._build_prompt(case, focus_skill=InvokedSkill("pdf-processing", "# body"))
+
+    assert "(none: this harness advertised no skills)" in prompt
+    assert "not recorded" not in prompt
+
+
 def test_prompt_tells_the_judge_a_refused_load_is_not_a_wrong_choice():
     """Selection is about the choice, not the outcome.
 
